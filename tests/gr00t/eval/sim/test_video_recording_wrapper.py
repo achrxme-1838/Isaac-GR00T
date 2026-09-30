@@ -15,6 +15,7 @@
 
 from collections import OrderedDict
 import io
+import os
 import shutil
 
 from gr00t.eval.sim.wrapper.video_recording_wrapper import VideoRecordingWrapper
@@ -109,6 +110,8 @@ def test_video_recording_wrapper_configures_ffmpeg_h264_quality_options(monkeypa
 
     popen_calls = []
     process = FakeProcess()
+    monkeypatch.setenv("LD_PRELOAD", "/simulator/libstdc++.so.6")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/simulator/lib")
     monkeypatch.setattr(
         "gr00t.eval.sim.wrapper.video_recording_wrapper.subprocess.Popen",
         lambda cmd, **kwargs: popen_calls.append((cmd, kwargs)) or process,
@@ -121,6 +124,9 @@ def test_video_recording_wrapper_configures_ffmpeg_h264_quality_options(monkeypa
     cmd, kwargs = popen_calls[0]
     assert kwargs["stdin"] == -1
     assert kwargs["stderr"] == -1
+    assert "LD_PRELOAD" not in kwargs["env"]
+    assert kwargs["env"]["LD_LIBRARY_PATH"] == "/simulator/lib"
+    assert os.environ["LD_PRELOAD"] == "/simulator/libstdc++.so.6"
     assert cmd[:2] == ["ffmpeg", "-y"]
     assert cmd[cmd.index("-vcodec") + 1] == "rawvideo"
     assert cmd[cmd.index("-s") + 1] == "2x2"

@@ -88,6 +88,28 @@ def test_close_surfaces_nonzero_ffmpeg_exit():
     assert wrapper.env.closed is True
 
 
+def test_broken_pipe_reports_encoder_stderr_and_close_is_safe():
+    mod = _import_module()
+    wrapper = _make_wrapper(
+        mod,
+        [sys.executable, "-c", "import sys; sys.stderr.write('encoder ABI mismatch'); sys.exit(3)"],
+    )
+    proc = wrapper.video_process
+    # Wait for the reader to exit, then write more than the pipe buffer so
+    # the failure occurs during the frame write rather than a later flush.
+    proc.wait(timeout=5)
+    frame = mod.np.zeros((64, 64, 3), dtype=mod.np.uint8)
+    wrapper.video_shape = frame.shape
+    wrapper.video_dtype = frame.dtype
+
+    with pytest.raises(RuntimeError, match="ffmpeg video recording failed: encoder ABI mismatch"):
+        wrapper._write_video_frame(frame)
+
+    assert wrapper.video_process is None
+    wrapper.close()
+    assert wrapper.env.closed is True
+
+
 def test_close_kills_wedged_recorder_within_grace(monkeypatch):
     mod = _import_module()
     monkeypatch.setattr(mod, "_FFMPEG_CLOSE_GRACE_SECONDS", 0.5)
