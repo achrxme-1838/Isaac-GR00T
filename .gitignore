@@ -169,3 +169,6 @@ offline_open_loop_eval_plots/
 /models
 /data
 checkpoints/*
+
+# RoboCasa365 checkout created by the simulator installer
+/external_dependencies/robocasa365/

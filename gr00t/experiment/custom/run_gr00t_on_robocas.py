@@ -1,4 +1,11 @@
-"""Evaluate the pretrained REAL_G1 policy on RoboCasa tabletop tasks.
+"""Evaluate REAL_G1 tabletop or RoboCasa365 N1.5 kitchen policies.
+
+Use ``--mode robocasa365-n15 --task OpenCabinet`` for the RoboCasa team's
+PandaOmron checkpoints. This mode requires a separate RoboCasa365 simulator
+environment and ``serve_robocasa365_n15.py`` running in the official N1.5 fork's
+environment. See ``robocasa365_n15.md`` beside this script for setup and CLI.
+The default mode remains ``real-g1``. EEF/ghost overlays and WBC settings apply
+only to real-g1; the kitchen mode displays the simulator and all three cameras.
 
 This is the executable rollout client. Model-free regression tests for its
 adapter live in ``tests/gr00t/experiment/test_real_g1_robocasa.py``.
@@ -30,6 +37,23 @@ Task distractors are disabled by default for this tabletop experiment. Use
 ``--use-distractors`` to enable them; some task-specific distractors (such as
 PnPAppleToPlate's coffee_pod) are absent from the published asset archives.
 The interactive MuJoCo viewer opens by default; drag/scroll to move the camera.
+In the simulator, cyan/magenta spheres show the left/right EEF position commands;
+white spheres show the current wrist frames. Lines and labels show their distance.
+RGB axes show wrist X/Y/Z orientation: long axes at the EEF command, short axes
+at the actual wrist, medium axes at the joint-command ghost. Degree labels compare
+EEF versus actual and EEF versus joint FK. Use ``--no-visualize-eef-rotation``
+to hide the orientation overlay. The frame is wrist_yaw_link, not the palm or TCP.
+These are decoded absolute pelvis-frame commands, transformed into world space
+for display. They update at each executed action step and do not drive the robot.
+Use ``--no-visualize-eef`` to hide them. The markers are viewer-only and do not
+appear in the policy's camera images. Smoke tests have no EEF target markers.
+Translucent cyan/magenta arms show left/right joint-command poses, including
+the commanded waist and hands, after joint-limit clipping. These ghosts use
+separate forward kinematics and do not affect physics or camera observations.
+Use ``--no-visualize-joint-targets`` to hide the ghost arms.
+The companion "GR00T policy input" window shows the actual language command and
+ego-camera frame history supplied for each action chunk, before server-side
+image preprocessing. Closing this companion window leaves the simulator running.
 Use ``--no-visualize`` for headless execution. Video recording is opt-in via
 ``--video-dir outputs/real_g1_robocasa``.
 ``--smoke-test --max-episode-steps 20`` holds the initial joint positions to
@@ -40,15 +64,16 @@ This experiment fixes the lower body. It executes the model's decoded absolute
 arm/hand/waist joint targets, not its redundant wrist EEF targets or navigation
 and base-height commands. Relative-to-absolute conversion is already performed
 by Gr00tPolicy: do not add the current joint positions again here.
-The initial arm pose lifts the hands clear of the tabletop and is held during
-object settling. The base is placed 0.30 m from the fixture's front reference
+The initial arm pose lifts and spreads the hands to clear the tabletop and
+reduce ego-camera occlusion. It is held during object settling.
+The base is placed 0.30 m from the fixture's front reference
 edge by default; --robot-table-distance adjusts this clearance.
 """
 
 from __future__ import annotations
 
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import importlib.util
 import json
 import os
@@ -72,6 +97,13 @@ from gr00t.data.types import ModalityConfig  # noqa: E402
 from gr00t.eval._horizon_contract import PolicyHorizonSpec  # noqa: E402
 from gr00t.eval.sim.wrapper.multistep_wrapper import MultiStepWrapper  # noqa: E402
 from gr00t.eval.sim.wrapper.video_recording_wrapper import VideoRecordingWrapper  # noqa: E402
+from gr00t.experiment.custom.eef_target_viewer import (  # noqa: E402
+    EefTargetViewer,
+    eef_positions_in_world,
+    eef_rotations_in_world,
+)
+from gr00t.experiment.custom.joint_target_viewer import JointTargetGhost  # noqa: E402
+from gr00t.experiment.custom.policy_input_viewer import PolicyInputViewer  # noqa: E402
 
 
 JOINT_DIMS = {"left_arm": 7, "right_arm": 7, "left_hand": 7, "right_hand": 7, "waist": 3}
@@ -82,8 +114,14 @@ LANGUAGE_KEY = "annotation.human.task_description"
 
 @dataclass
 class Config:
-    task: str = "PnPAppleToPlate"
-    """RoboCasa tabletop task class name (not a GR1 gym environment ID)."""
+    mode: Literal["real-g1", "robocasa365-n15"] = "real-g1"
+    """Robot/policy interface: REAL_G1 tabletop or official N1.5 PandaOmron kitchen."""
+    task: str | None = None
+    """Task class name. Defaults to PnPAppleToPlate (G1) or OpenCabinet (365)."""
+    robocasa365_path: Path = REPO_ROOT / "external_dependencies/robocasa365"
+    """RoboCasa365 checkout; use the Python environment from setup_RoboCasa365.sh."""
+    robocasa_split: Literal["target", "pretrain"] = "target"
+    """Kitchen scene/object split. Official target-posttraining checkpoints use target."""
     layout_id: int | None = None
     """Optional layout override; otherwise use the task's supported layouts."""
     style_id: int | None = None
@@ -96,11 +134,14 @@ class Config:
     wbc_path: Path = REPO_ROOT.parent / "GR00T-WholeBodyControl"
     """Checkout containing decoupled_wbc's G1 robot and assets."""
     policy_host: str = "127.0.0.1"
-    policy_port: int = 5555
+    policy_port: int | None = None
+    """Defaults to 5555 for G1 or 5556 for the N1.5 bridge server."""
     policy_timeout_ms: int = 120_000
     n_episodes: int = 1
-    max_episode_steps: int = 400
-    n_action_steps: int = 8
+    max_episode_steps: int | None = None
+    """Defaults to 400 for G1 or the RoboCasa365 task's benchmark horizon."""
+    n_action_steps: int | None = None
+    """Actions executed per policy request: defaults to 8 for G1, 16 for N1.5."""
     seed: int = 0
     instruction: str | None = None
     """Override the task's language instruction, if set."""
@@ -109,11 +150,17 @@ class Config:
     camera_width: int = 640
     camera_height: int = 480
     visualize: bool = True
-    """Open the interactive MuJoCo viewer; use --no-visualize for headless runs."""
+    """Show the simulator and policy language/camera inputs; --no-visualize runs headless."""
+    visualize_eef: bool = True
+    """Overlay EEF position commands and current wrists in the simulator viewer."""
+    visualize_eef_rotation: bool = True
+    """Show RGB orientation axes and angular errors with the EEF markers."""
+    visualize_joint_targets: bool = True
+    """Overlay translucent arms at the applied arm/hand/waist joint targets."""
     video_dir: Path | None = None
     """Record videos and results here when set; recording is disabled by default."""
     smoke_test: bool = False
-    """Hold initial joints instead of contacting a model server."""
+    """Run without a server: hold G1 joints or send zero kitchen motion deltas."""
 
 
 def load_source_module(name: str, path: Path):
@@ -189,8 +236,10 @@ def load_g1_model(wbc_path: Path):
         def init_qpos(self):
             qpos = super().init_qpos.copy()
             # G1's all-zero pose puts its wrists below the 0.92 m tabletop.
-            # Slightly spread the arms and lift the forearms before settling.
-            for side, roll in (("left", 0.2), ("right", -0.2)):
+            # Lift the forearms and spread the hands out of the central ego
+            # view. At +/-0.2 rad, the right hand almost entirely hides the
+            # apple in PnPAppleToPlate's default initial scene.
+            for side, roll in (("left", 0.6), ("right", -0.6)):
                 for joint, angle in (("shoulder_roll", roll), ("elbow", -0.5)):
                     name = f"{self.naming_prefix}{side}_{joint}_joint"
                     qpos[self.joints.index(name)] = angle
@@ -236,6 +285,13 @@ def make_controller_config():
     }
     for part in config["body_parts"].values():
         part["input_type"] = "absolute"
+        # GR1's explicit kd=200 destabilizes the coupled G1 arm/waist
+        # controllers: even a 0.1 rad shoulder step excites sustained motion
+        # in the opposite arm. Let JOINT_POSITION derive kd=2*sqrt(kp)
+        # (about 63.25 for kp=1000) using its critical damping setting.
+        part.pop("kd", None)
+        part.pop("kv", None)
+        part["damping_ratio"] = 1.0
         if "gripper" in part:
             part["gripper"]["use_action_scaling"] = False
     return config
@@ -280,12 +336,20 @@ class RealG1TabletopEnv(gym.Env):
         instruction: str | None = None,
         camera_name="robot0_oak_egoview",
         visualize: bool = False,
+        visualize_eef: bool = True,
+        visualize_eef_rotation: bool = True,
+        visualize_joint_targets: bool = True,
     ):
         self.env = env
         self.robot_info = robot_info
         self.instruction = instruction
         self.camera_name = camera_name
         self.visualize = visualize
+        self.visualize_eef = visualize_eef
+        self.visualize_eef_rotation = visualize_eef_rotation
+        self.visualize_joint_targets = visualize_joint_targets
+        self.eef_viewer = None
+        self.input_viewer = None
         self.viewer_closed = False
         self.render_mode = "rgb_array"
         self.render_cache = None
@@ -392,6 +456,7 @@ class RealG1TabletopEnv(gym.Env):
         raw_obs = self.env.reset()
         self._bind_joints()
         self.viewer_closed = False
+        self.eef_viewer = None
         if self.visualize:
             # Frame this robot and its table, rather than the kitchen-wide
             # camera inherited from RoboCasa. The free camera stays interactive.
@@ -406,7 +471,27 @@ class RealG1TabletopEnv(gym.Env):
             }
             # Show the initial scene before waiting for the first model action.
             self.env.viewer.update()
+            if self.visualize_eef or self.visualize_joint_targets:
+                ghost = (
+                    JointTargetGhost(self.env.sim, self.joint_names, self.qpos_indices)
+                    if self.visualize_joint_targets
+                    else None
+                )
+                self.eef_viewer = EefTargetViewer(self.env.viewer.viewer, ghost)
+                self._update_eef_markers({})
         return self._observation(raw_obs), {"success": False}
+
+    def _update_eef_markers(self, action, joint_targets=None):
+        if self.eef_viewer is not None:
+            self.eef_viewer.update(
+                eef_positions_in_world(self.env.sim, self.base_body, self.wrist_bodies, action)
+                if self.visualize_eef
+                else {},
+                joint_targets,
+                eef_rotations_in_world(self.env.sim, self.base_body, self.wrist_bodies, action)
+                if self.visualize_eef and self.visualize_eef_rotation
+                else None,
+            )
 
     def step(self, action):
         step_start = time.monotonic() if self.visualize else None
@@ -425,11 +510,14 @@ class RealG1TabletopEnv(gym.Env):
         vector = self.env.robots[0].create_action_vector(parts)
         raw_obs, reward, done, info = self.env.step(vector)
         info["success"] = bool(self.env._check_success())
+        self._update_eef_markers(action, targets)
         if self.visualize:
             # robosuite's mjviewer syncs on every control step, including the
             # individual steps inside MultiStepWrapper's action chunks.
             self.viewer_closed = not self.env.viewer.viewer.is_running()
             time.sleep(max(0.0, self.env.control_timestep - (time.monotonic() - step_start)))
+        if self.input_viewer is not None:
+            self.input_viewer.poll()
         return self._observation(raw_obs), float(reward), bool(done), self.viewer_closed, info
 
     def render(self):
@@ -442,6 +530,7 @@ class RealG1TabletopEnv(gym.Env):
 
 
 def create_env(config: Config) -> RealG1TabletopEnv:
+    config = resolve_config(config)
     # Select the pinned tabletop fork explicitly; the kitchen and WBC forks
     # use the same Python package name and are not interchangeable.
     tabletop_path = REPO_ROOT / "external_dependencies/robocasa-gr1-tabletop-tasks"
@@ -529,7 +618,14 @@ def create_env(config: Config) -> RealG1TabletopEnv:
     )
     try:
         return RealG1TabletopEnv(
-            env, robot_info, config.instruction, config.camera_name, visualize=config.visualize
+            env,
+            robot_info,
+            config.instruction,
+            config.camera_name,
+            visualize=config.visualize,
+            visualize_eef=config.visualize_eef,
+            visualize_eef_rotation=config.visualize_eef_rotation,
+            visualize_joint_targets=config.visualize_joint_targets,
         )
     except Exception:
         env.close()
@@ -550,7 +646,46 @@ def validate_modality_config(modalities):
             )
 
 
+def resolve_config(config: Config) -> Config:
+    kitchen = config.mode == "robocasa365-n15"
+    config = replace(
+        config,
+        task=config.task or ("OpenCabinet" if kitchen else "PnPAppleToPlate"),
+        policy_port=(5556 if kitchen else 5555)
+        if config.policy_port is None
+        else config.policy_port,
+        n_action_steps=(16 if kitchen else 8)
+        if config.n_action_steps is None
+        else config.n_action_steps,
+    )
+    if kitchen and (config.layout_id is not None or config.style_id is not None):
+        raise ValueError("RoboCasa365 layouts/styles are selected by --robocasa-split.")
+    if config.max_episode_steps is None:
+        horizon = 400
+        if kitchen:
+            from gr00t.experiment.custom.robocasa365_n15 import load_robocasa365
+
+            load_robocasa365(config.robocasa365_path)
+            from robocasa.utils.dataset_registry_utils import get_task_horizon
+
+            horizon = get_task_horizon(config.task)
+        config = replace(config, max_episode_steps=horizon)
+    return config
+
+
 def main(config: Config):
+    os.environ.setdefault("MUJOCO_GL", "egl")
+    config = resolve_config(config)
+    kitchen = config.mode == "robocasa365-n15"
+    if kitchen:
+        from gr00t.experiment.custom import robocasa365_n15 as kitchen_mode
+
+    action_dims = kitchen_mode.ACTION_DIMS if kitchen else ACTION_DIMS
+    video_keys = (
+        tuple(f"video.{key}" for key in kitchen_mode.CAMERA_NAMES)
+        if kitchen
+        else ("video.ego_view",)
+    )
     for name in (
         "n_episodes",
         "max_episode_steps",
@@ -562,10 +697,11 @@ def main(config: Config):
     ):
         if getattr(config, name) <= 0:
             raise ValueError(f"{name} must be positive")
-    os.environ.setdefault("MUJOCO_GL", "egl")
     with ExitStack() as stack:
         policy = None
-        if config.smoke_test:
+        if config.smoke_test and kitchen:
+            modalities = kitchen_mode.modality_config()
+        elif config.smoke_test:
             # No model loading for the simulator-only check. Real evaluation
             # always resolves temporal offsets from the server's checkpoint.
             modalities = {
@@ -587,11 +723,15 @@ def main(config: Config):
                 )
             )
             modalities = policy.get_modality_config()
-            validate_modality_config(modalities)
+            if kitchen:
+                kitchen_mode.validate_modality_config(modalities)
+            else:
+                validate_modality_config(modalities)
         contract = PolicyHorizonSpec.from_modality_config(
             modalities, n_action_steps=config.n_action_steps
         )
-        env = create_env(config)
+        adapter = kitchen_mode.create_env(config) if kitchen else create_env(config)
+        env = adapter
         stack.callback(lambda: env.close())
         if config.video_dir is not None:
             env = VideoRecordingWrapper(
@@ -600,7 +740,7 @@ def main(config: Config):
                 steps_per_render=1,
                 max_episode_steps=config.max_episode_steps,
                 fps=20,
-                record_video_keys=("video.ego_view",),
+                record_video_keys=video_keys,
             )
         env = MultiStepWrapper(
             env,
@@ -608,15 +748,40 @@ def main(config: Config):
             max_episode_steps=config.max_episode_steps,
             terminate_on_success=True,
         )
+        input_viewer = None
+        if config.visualize:
+            input_viewer = PolicyInputViewer(
+                kitchen_mode.CAMERA_NAMES if kitchen else config.camera_name,
+                contract.video_delta_indices,
+                config.visualize_eef and not kitchen,
+                config.visualize_joint_targets and not kitchen,
+                config.visualize_eef_rotation and not kitchen,
+            )
+            stack.callback(input_viewer.close)
+            adapter.input_viewer = input_viewer
         results = []
         for episode in range(config.n_episodes):
             obs, _ = env.reset(seed=config.seed + episode)
             if policy is not None:
                 policy.reset()
-            held_joints = {group: obs[f"state.{group}"][-1].copy() for group in JOINT_DIMS}
+            held_joints = (
+                {} if kitchen else {group: obs[f"state.{group}"][-1].copy() for group in JOINT_DIMS}
+            )
             success, steps, total_reward = False, 0, 0.0
             while True:
-                if policy is None:
+                if input_viewer is not None:
+                    input_viewer.update(
+                        obs[LANGUAGE_KEY],
+                        {key: obs[f"video.{key}"] for key in kitchen_mode.CAMERA_NAMES}
+                        if kitchen
+                        else obs["video.ego_view"],
+                        episode=episode + 1,
+                        step=steps,
+                        smoke_test=config.smoke_test,
+                    )
+                if policy is None and kitchen:
+                    actions = kitchen_mode.smoke_actions(contract.action_horizon)
+                elif policy is None:
                     actions = {
                         f"action.{group}": np.repeat(value[None], contract.action_horizon, axis=0)
                         for group, value in held_joints.items()
@@ -628,7 +793,7 @@ def main(config: Config):
                     }
                     batched_actions, _ = policy.get_action(batched_obs)
                     actions = {}
-                    for key, dim in ACTION_DIMS.items():
+                    for key, dim in action_dims.items():
                         value = np.asarray(batched_actions[f"action.{key}"])
                         if value.shape != (1, contract.action_horizon, dim) or not np.all(
                             np.isfinite(value)
@@ -652,19 +817,27 @@ def main(config: Config):
             }
             results.append(result)
             print(json.dumps(result))
-            if env.unwrapped.viewer_closed:
+            if adapter.viewer_closed:
                 break
         summary = {
+            "mode": config.mode,
             "task": config.task,
-            "robot": "G1Tabletop",
-            "embodiment": "REAL_G1",
+            "robot": "PandaOmron" if kitchen else "G1Tabletop",
+            "embodiment": "new_embodiment" if kitchen else "REAL_G1",
             "smoke_test": config.smoke_test,
-            "use_distractors": config.use_distractors,
-            "robot_base_height": config.robot_base_height,
-            "robot_table_distance": config.robot_table_distance,
-            "camera_name": config.camera_name,
+            "n_action_steps": contract.n_action_steps,
+            "max_episode_steps": config.max_episode_steps,
             "episodes": results,
         }
+        if kitchen:
+            summary.update(split=config.robocasa_split, camera_names=kitchen_mode.CAMERA_NAMES)
+        else:
+            summary.update(
+                use_distractors=config.use_distractors,
+                robot_base_height=config.robot_base_height,
+                robot_table_distance=config.robot_table_distance,
+                camera_name=config.camera_name,
+            )
         if not config.smoke_test:
             summary["success_rate"] = sum(r["success"] for r in results) / len(results)
         if config.video_dir is not None:
