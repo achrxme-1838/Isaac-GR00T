@@ -143,17 +143,11 @@ class VideoRecordingWrapper(gym.Wrapper):
             )
         cmd.append(str(self.file_path))
 
-        # Preloads used by the Python simulator (e.g. a system libstdc++ for
-        # OpenGL) can be ABI-incompatible with a Conda ffmpeg. Let the encoder
-        # load its own libraries without changing the simulator's environment.
-        encoder_env = os.environ.copy()
-        encoder_env.pop("LD_PRELOAD", None)
         try:
             self.video_process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                env=encoder_env,
             )
         except FileNotFoundError as exc:
             raise RuntimeError(
@@ -172,13 +166,7 @@ class VideoRecordingWrapper(gym.Wrapper):
 
         assert self.video_process is not None
         assert self.video_process.stdin is not None
-        try:
-            self.video_process.stdin.write(np.ascontiguousarray(frame).tobytes())
-        except BrokenPipeError as exc:
-            # Reap the encoder and report its stderr at the failing step,
-            # rather than raising another exception during env.close().
-            self._close_video_writer()
-            raise RuntimeError("ffmpeg closed its input before the video was complete") from exc
+        self.video_process.stdin.write(np.ascontiguousarray(frame).tobytes())
 
     def _close_video_writer(self):
         process = self.video_process
