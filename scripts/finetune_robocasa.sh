@@ -45,7 +45,7 @@ python scripts/repair_lerobot_metadata.py "$DATASET_PATH" \
 
 unset RESUME_FROM_CHECKPOINT SAVE_ONLY_MODEL
 bash examples/finetune.sh \
-    --base-model-path "$PWD/models/GR00T-N1.7-3B" \
+    --base-model-path nvidia/GR00T-N1.7-3B \
     --dataset-path "$DATASET_PATH" \
     --embodiment-tag ROBOCASA_PANDA_OMRON \
     --output-dir "$PWD/outputs/robocasa_n17_$SLURM_JOB_ID" \
