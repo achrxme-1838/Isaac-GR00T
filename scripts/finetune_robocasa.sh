@@ -33,8 +33,8 @@ DATASET_PATH="$(find "$GROOT_DATA_DIR" -maxdepth 1 -type d \
 
 export NUM_GPUS="$SLURM_GPUS_ON_NODE"
 export GLOBAL_BATCH_SIZE=$((NUM_GPUS * 4))
-export MAX_STEPS=10000
-export SAVE_STEPS=500
+export MAX_STEPS=100000
+export SAVE_STEPS=20000
 export DATALOADER_NUM_WORKERS=2
 export USE_WANDB=1
 export WANDB_MODE=online
