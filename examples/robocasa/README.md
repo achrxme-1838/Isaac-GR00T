@@ -128,3 +128,26 @@ gr00t/eval/sim/robocasa/robocasa_uv/.venv/bin/python gr00t/eval/rollout_policy.p
     --n-action-steps 8 \
     --n-envs 5
 ```
+
+## Interactive GUI (no video recording)
+
+After the same one-time RoboCasa setup, start the policy server above with your
+finetuned checkpoint and `--use-sim-policy-wrapper`. In another local desktop
+terminal, run:
+
+```bash
+unset PYOPENGL_PLATFORM
+MUJOCO_GL=glfw gr00t/eval/sim/robocasa/robocasa_uv/.venv/bin/python \
+    scripts/eval_robocasa_gui.py \
+    --env-name robocasa_panda_omron/OpenDrawer_PandaOmron_Env \
+    --n-episodes 3 \
+    --max-episode-steps 720 \
+    --n-action-steps 8
+```
+
+This client opens an interactive MuJoCo 3D viewer for one environment and does
+not save videos. Drag the mouse to change the viewpoint and scroll to zoom.
+Close the viewer window or press Ctrl+C in the client terminal to stop. Each
+episode reset opens a new viewer for the new kitchen scene. The default policy
+server address is `127.0.0.1:5555`; use `--policy-client-host` and
+`--policy-client-port` to change it. A graphical desktop session is required.

@@ -21,6 +21,18 @@ import types
 from gr00t.eval import rollout_policy
 
 
+# scripts/eval_robocasa_gui.py의 --env-name 예시 (기존 RoboCasa PandaOmron):
+# robocasa_panda_omron/OpenDrawer_PandaOmron_Env          # 서랍 열기
+# robocasa_panda_omron/CloseDrawer_PandaOmron_Env         # 서랍 닫기
+# robocasa_panda_omron/OpenSingleDoor_PandaOmron_Env      # 수납장 문 열기
+# robocasa_panda_omron/TurnOnMicrowave_PandaOmron_Env     # 전자레인지 켜기
+# robocasa_panda_omron/CoffeePressButton_PandaOmron_Env   # 커피 머신 버튼 누르기
+# robocasa_panda_omron/TurnOnSinkFaucet_PandaOmron_Env    # 수도꼭지 켜기
+# robocasa_panda_omron/TurnOnStove_PandaOmron_Env         # 스토브 켜기
+# robocasa_panda_omron/PnPCounterToSink_PandaOmron_Env    # 조리대 물체를 싱크대로 옮기기
+# 아래 테스트의 robocasa365_panda_omron/...은 별도의 RoboCasa365 환경입니다.
+
+
 def test_robocasa365_env_fn_passes_split_to_gym_make(monkeypatch):
     fake_robocasa365 = types.ModuleType("gr00t.eval.sim.robocasa365.gymnasium_groot")
     monkeypatch.setitem(
