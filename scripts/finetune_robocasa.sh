@@ -4,9 +4,9 @@
 #SBATCH --error=robocasa-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:a6000:1
-#SBATCH --cpus-per-gpu=8
-#SBATCH --mem-per-gpu=48G
+#SBATCH --gres=gpu:a6000:4
+#SBATCH --cpus-per-gpu=11
+#SBATCH --mem-per-gpu=32G
 #SBATCH --time=72:00:00
 #SBATCH --exclude=node1,node2
 #SBATCH --export=ALL
