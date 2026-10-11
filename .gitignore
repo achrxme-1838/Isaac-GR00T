@@ -170,3 +170,4 @@ offline_open_loop_eval_plots/
 /data
 *.err
 *.out
+eval_videos/*
