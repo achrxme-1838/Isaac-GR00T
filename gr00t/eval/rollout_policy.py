@@ -16,7 +16,9 @@
 from collections import defaultdict
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import partial
+import json
 from pathlib import Path
 import sys
 import time
@@ -180,6 +182,7 @@ def create_eval_env(
     total_n_envs: int,
     wrapper_configs: WrapperConfigs,
     robocasa_split: str = "",
+    x_emb: dict[str, float] | None = None,
 ) -> gym.Env:
     """Create a single evaluation environment with wrappers.
 
@@ -191,7 +194,13 @@ def create_eval_env(
         Wrapped gymnasium environment
     """
 
+    if x_emb is not None and not env_name.startswith("robocasa_panda_omron/"):
+        raise ValueError("--x_emb supports robocasa_panda_omron environments only.")
     env = get_gym_env(env_name, env_idx, total_n_envs, robocasa_split=robocasa_split)
+    if x_emb:
+        from gr00t.eval.sim.robocasa_x_emb import configure_x_emb
+
+        configure_x_emb(env, x_emb)
     if wrapper_configs.video.video_dir is not None:
         from gr00t.eval.sim.wrapper.video_recording_wrapper import VideoRecordingWrapper
 
@@ -407,6 +416,7 @@ def run_rollout_gymnasium_policy(
     n_envs: int = 1,
     seed: int | None = None,
     robocasa_split: str = "",
+    x_emb: dict[str, float] | None = None,
 ) -> Any:
     """Run policy rollouts in parallel environments.
 
@@ -437,6 +447,7 @@ def run_rollout_gymnasium_policy(
             total_n_envs=n_envs,
             wrapper_configs=wrapper_configs,
             robocasa_split=robocasa_split,
+            x_emb=x_emb,
         )
         for idx in range(n_envs)
     ]
@@ -535,6 +546,46 @@ def create_gr00t_sim_policy(
     return policy
 
 
+def _json_numpy(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"Cannot serialize {type(value).__name__} to JSON")
+
+
+def save_rollout_results(results, output_dir: str, config: dict) -> Path:
+    """Persist metrics after the rollout and video writers have closed."""
+    env_name, successes, episode_infos = results
+    successes = [bool(success) for success in successes]
+    completed = len(successes)
+    n_successes = sum(successes)
+    success_rate = n_successes / completed if completed else None
+    finished_at = datetime.now().astimezone()
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    result_path = output / f"results_{finished_at:%y%m%d-%H%M%S-%f}.json"
+    report = {
+        "finished_at": finished_at.isoformat(),
+        "env_name": env_name,
+        "n_episodes": completed,
+        "n_successes": n_successes,
+        "success_rate": success_rate,
+        "episode_successes": successes,
+        "episode_infos": episode_infos,
+        "config": config,
+    }
+    with result_path.open("x", encoding="utf-8") as stream:
+        json.dump(report, stream, indent=2, ensure_ascii=False, default=_json_numpy)
+        stream.write("\n")
+    if success_rate is None:
+        print("Success rate: N/A (no completed episodes)")
+    else:
+        print(f"Success rate: {n_successes}/{completed} ({success_rate:.2%})")
+    print(f"Results saved to: {result_path}", flush=True)
+    return result_path
+
+
 def run_gr00t_sim_policy(
     env_name: str,
     n_episodes: int,
@@ -549,7 +600,13 @@ def run_gr00t_sim_policy(
     trt_mode: InferenceMode = InferenceMode.n17_full_pipeline,
     seed: int | None = None,
     robocasa_split: str = "",
+    no_video: bool = False,
+    x_emb: dict[str, float] | None = None,
 ):
+    if min(n_episodes, n_envs, max_episode_steps, n_action_steps) < 1:
+        raise ValueError("Episode, environment and step counts must be positive.")
+    if x_emb is not None and not env_name.startswith("robocasa_panda_omron/"):
+        raise ValueError("--x_emb supports robocasa_panda_omron environments only.")
     # seed_everything resolves `None` via the GR00T_EVAL_SEED env var and is a
     # no-op when that is also unset, so the historical non-deterministic
     # behavior is preserved by default. Returns the effective seed (or None)
@@ -603,7 +660,7 @@ def run_gr00t_sim_policy(
                 terminate_on_success=True,
             ),
             video=VideoConfig(
-                video_dir=video_dir,
+                video_dir=None if no_video else video_dir,
                 max_episode_steps=max_episode_steps,
             ),
         )
@@ -616,8 +673,29 @@ def run_gr00t_sim_policy(
             n_envs=n_envs,
             seed=seed,
             robocasa_split=robocasa_split,
+            x_emb=x_emb,
         )
-        print("Video saved to: ", wrapper_configs.video.video_dir)
+        if not no_video:
+            print("Video saved to: ", wrapper_configs.video.video_dir)
+        save_rollout_results(
+            results,
+            video_dir,
+            config={
+                "model_path": model_path,
+                "policy_client_host": policy_client_host,
+                "policy_client_port": policy_client_port,
+                "n_episodes_requested": n_episodes,
+                "n_envs": n_envs,
+                "max_episode_steps": max_episode_steps,
+                "n_action_steps": n_action_steps,
+                "seed": seed,
+                "robocasa_split": robocasa_split,
+                "no_video": no_video,
+                "x_emb": x_emb or {},
+                "trt_engine_path": trt_engine_path,
+                "trt_mode": str(trt_mode),
+            },
+        )
         return results
 
 
@@ -650,7 +728,11 @@ class RolloutConfig:
     """Number of action steps."""
 
     video_dir: str | None = None
-    """Directory to save videos. If None, uses /tmp/sim_eval_videos_<env>_<uuid>."""
+    """Directory for videos and results_*.json (also with --no-video).
+    If None, uses /tmp/sim_eval_videos_<env>_<uuid>."""
+
+    no_video: bool = False
+    """Skip video recording; still save success metrics in video_dir."""
 
     trt_engine_path: str = ""
     """Path to TRT engine directory. If set, uses TRT inference instead of PyTorch."""
@@ -670,8 +752,9 @@ class RolloutConfig:
     """Optional RoboCasa/RoboCasa365 split forwarded to the simulator."""
 
 
-if __name__ == "__main__":
-    args = tyro.cli(RolloutConfig)
+def main(args: RolloutConfig | None = None, *, x_emb: dict[str, float] | None = None):
+    if args is None:
+        args = tyro.cli(RolloutConfig)
 
     # validate policy configuration
     assert (args.model_path and not (args.policy_client_host or args.policy_client_port)) or (
@@ -697,6 +780,11 @@ if __name__ == "__main__":
         trt_mode=args.trt_mode,
         seed=args.seed,
         robocasa_split=args.robocasa_split,
+        no_video=args.no_video,
+        x_emb=x_emb,
     )
-    print("results: ", results)
-    print("success rate: ", np.mean(results[1]))
+    return results
+
+
+if __name__ == "__main__":
+    main()

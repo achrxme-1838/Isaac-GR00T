@@ -2,9 +2,9 @@
 
 import argparse
 
+from gr00t.eval.sim.robocasa_x_emb import parse_x_emb, scale_robot_xml
 import numpy as np
 import pytest
-from scripts.eval_robocasa_gui_x_emb import parse_x_emb, scale_robot_xml
 
 
 @pytest.mark.parametrize(
