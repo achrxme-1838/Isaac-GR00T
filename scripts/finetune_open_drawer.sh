@@ -1,17 +1,19 @@
 #!/bin/bash
 #SBATCH --job-name=gr00t-open-drawer
-#SBATCH --output=open_drawer-%j.out
-#SBATCH --error=open_drawer-%j.err
+#SBATCH --output=/home/visitor_km/shlim/slurm-logs/gr00t-%j.out
+#SBATCH --error=/home/visitor_km/shlim/slurm-logs/gr00t-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:a6000:1
-#SBATCH --cpus-per-gpu=8
+#SBATCH --cpus-per-gpu=16
 #SBATCH --mem-per-gpu=48G
 #SBATCH --time=72:00:00
 #SBATCH --exclude=node1,node2
 #SBATCH --export=ALL
 
 set -eo pipefail
+
+RUN_TIMESTAMP="$(date +%y%m%d-%H%M%S)"
 
 source "$HOME/miniconda3/bin/activate" "$HOME/shlim/conda/envs/gr00t_lsh"
 cd "$HOME/shlim/Isaac-GR00T"
@@ -44,7 +46,7 @@ bash examples/finetune.sh \
     --base-model-path nvidia/GR00T-N1.7-3B \
     --dataset-path "$DATASET_PATH" \
     --embodiment-tag ROBOCASA_PANDA_OMRON \
-    --output-dir "$PWD/outputs/open_drawer_n17_$SLURM_JOB_ID" \
+    --output-dir "$PWD/outputs/open_drawer_n17_$RUN_TIMESTAMP" \
     -- \
     --gradient-accumulation-steps 8 \
     --save-total-limit 2
