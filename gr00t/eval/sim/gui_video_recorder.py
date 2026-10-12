@@ -10,6 +10,7 @@ import numpy as np
 
 
 DEFAULT_RECORD_CAMERA = "robot0_agentview_left"
+RECORD_CAMERA_PULLBACK_M = 0.5
 
 
 def add_recording_args(parser):
@@ -63,6 +64,9 @@ class RoboCasaCameraRenderer:
             mujoco.mjtCatBit.mjCAT_ALL,
             self.scene,
         )
+        # Move only the recording view backwards along its optical axis.
+        for eye in self.scene.camera:
+            eye.pos[:] -= RECORD_CAMERA_PULLBACK_M * eye.forward
 
     def render(self):
         import mujoco

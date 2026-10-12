@@ -13,6 +13,7 @@ gr00t/eval/sim/robocasa/robocasa_uv/.venv/bin/python \
 
 --record_vid disables the GUI and saves 960x720 MP4s to
 eval_videos/gui_<timestamp>/episode_NNN.mp4 using robot0_agentview_left (arm and workspace).
+The recording camera is pulled back 0.5 m to keep more of the arm in view.
 Without --record_vid, the interactive GUI opens as usual.
 Use --video-dir PATH or --record-camera robot0_agentview_right to override these defaults.
 """

@@ -58,6 +58,7 @@ gr00t/eval/sim/robocasa/robocasa_uv/.venv/bin/python \
 
 녹화하려면 위 명령 끝에 `--record_vid`를 추가한다. 녹화 중에는 GUI 창을 열지 않는다.
 아래처럼 실행하면 팔과 작업 대상이 보이는 왼쪽 측면 카메라를 960×720 MP4로 저장한다.
+녹화 시점은 원래 카메라에서 0.5m 뒤로 이동해 긴 팔도 더 넓게 담는다.
 
 ```bash
 cd /home/lim/rl_ws/Isaac-GR00T

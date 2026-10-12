@@ -19,6 +19,7 @@ gr00t/eval/sim/robocasa/robocasa_uv/.venv/bin/python \
 --use_ext_adap         : --use_exp_adap=True와 동일한 별칭
 --use_exp_adap=False   : 변형된 팔의 실제 관측 사용 (기본값)
 --record_vid          : GUI 없이 왼쪽 측면 뷰(팔 + 작업 대상)를 960x720 MP4로 저장
+                        원래 카메라보다 0.5m 뒤에서 촬영
                         eval_videos/gui_<시각>/episode_NNN.mp4 (반투명 팔도 포함)
 --video-dir PATH      : 영상 저장 폴더 지정
 --record-camera robot0_agentview_right : 오른쪽 측면 뷰로 녹화
