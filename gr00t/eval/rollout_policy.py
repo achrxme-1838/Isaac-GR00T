@@ -28,6 +28,7 @@ import uuid
 from gr00t.data.embodiment_tags import EmbodimentTag
 from gr00t.deployment.modes import InferenceMode
 from gr00t.eval._horizon_contract import PolicyHorizonSpec
+from gr00t.eval._ik_metrics import extract_ik_metrics, format_ik_metrics
 from gr00t.eval.sim.env_utils import get_embodiment_tag_from_env_name
 from gr00t.eval.sim.wrapper.multistep_wrapper import MultiStepWrapper
 from gr00t.policy import BasePolicy
@@ -183,6 +184,7 @@ def create_eval_env(
     wrapper_configs: WrapperConfigs,
     robocasa_split: str = "",
     x_emb: dict[str, float] | None = None,
+    use_exp_adap: bool = False,
 ) -> gym.Env:
     """Create a single evaluation environment with wrappers.
 
@@ -194,8 +196,8 @@ def create_eval_env(
         Wrapped gymnasium environment
     """
 
-    if x_emb is not None and not env_name.startswith("robocasa_panda_omron/"):
-        raise ValueError("--x_emb supports robocasa_panda_omron environments only.")
+    if (x_emb is not None or use_exp_adap) and not env_name.startswith("robocasa_panda_omron/"):
+        raise ValueError("Embodiment changes/adaptation support robocasa_panda_omron only.")
     env = get_gym_env(env_name, env_idx, total_n_envs, robocasa_split=robocasa_split)
     if x_emb:
         from gr00t.eval.sim.robocasa_x_emb import configure_x_emb
@@ -219,6 +221,11 @@ def create_eval_env(
             overlay_text=wrapper_configs.video.overlay_text,
             record_video_keys=record_video_keys,
         )
+
+    if use_exp_adap:
+        from gr00t.eval.sim.robocasa_exp_adaptation import ExpertAdaptationWrapper
+
+        env = ExpertAdaptationWrapper(env, x_emb or {})
 
     env = MultiStepWrapper(
         env,
@@ -372,6 +379,16 @@ def _collect_rollout_episodes(
                         episode_infos["q_score"].append(np.max(env_infos["q_score"][env_idx]))
                     if "valid" in env_infos:
                         episode_infos["valid"].append(all(env_infos["valid"][env_idx]))
+                    if "final_info" in env_infos and env_infos["final_info"][env_idx] is not None:
+                        ik_metrics = extract_ik_metrics(env_infos["final_info"][env_idx])
+                    else:
+                        ik_metrics = extract_ik_metrics(env_infos, env_idx)
+                    if ik_metrics:
+                        episode_infos["exp_adap_ik"].append(ik_metrics)
+                        pbar.write(
+                            f"Episode {len(episode_successes) + 1} (env {env_idx}): "
+                            f"{format_ik_metrics(ik_metrics)}"
+                        )
                     # Accumulate per-episode results. Both lists are captured
                     # BEFORE the per-env trackers are reset to 0 below — without
                     # this ordering downstream consumers silently see
@@ -417,6 +434,7 @@ def run_rollout_gymnasium_policy(
     seed: int | None = None,
     robocasa_split: str = "",
     x_emb: dict[str, float] | None = None,
+    use_exp_adap: bool = False,
 ) -> Any:
     """Run policy rollouts in parallel environments.
 
@@ -448,6 +466,7 @@ def run_rollout_gymnasium_policy(
             wrapper_configs=wrapper_configs,
             robocasa_split=robocasa_split,
             x_emb=x_emb,
+            use_exp_adap=use_exp_adap,
         )
         for idx in range(n_envs)
     ]
@@ -602,11 +621,12 @@ def run_gr00t_sim_policy(
     robocasa_split: str = "",
     no_video: bool = False,
     x_emb: dict[str, float] | None = None,
+    use_exp_adap: bool = False,
 ):
     if min(n_episodes, n_envs, max_episode_steps, n_action_steps) < 1:
         raise ValueError("Episode, environment and step counts must be positive.")
-    if x_emb is not None and not env_name.startswith("robocasa_panda_omron/"):
-        raise ValueError("--x_emb supports robocasa_panda_omron environments only.")
+    if (x_emb is not None or use_exp_adap) and not env_name.startswith("robocasa_panda_omron/"):
+        raise ValueError("Embodiment changes/adaptation support robocasa_panda_omron only.")
     # seed_everything resolves `None` via the GR00T_EVAL_SEED env var and is a
     # no-op when that is also unset, so the historical non-deterministic
     # behavior is preserved by default. Returns the effective seed (or None)
@@ -674,6 +694,7 @@ def run_gr00t_sim_policy(
             seed=seed,
             robocasa_split=robocasa_split,
             x_emb=x_emb,
+            use_exp_adap=use_exp_adap,
         )
         if not no_video:
             print("Video saved to: ", wrapper_configs.video.video_dir)
@@ -692,6 +713,7 @@ def run_gr00t_sim_policy(
                 "robocasa_split": robocasa_split,
                 "no_video": no_video,
                 "x_emb": x_emb or {},
+                "use_exp_adap": use_exp_adap,
                 "trt_engine_path": trt_engine_path,
                 "trt_mode": str(trt_mode),
             },
@@ -752,7 +774,12 @@ class RolloutConfig:
     """Optional RoboCasa/RoboCasa365 split forwarded to the simulator."""
 
 
-def main(args: RolloutConfig | None = None, *, x_emb: dict[str, float] | None = None):
+def main(
+    args: RolloutConfig | None = None,
+    *,
+    x_emb: dict[str, float] | None = None,
+    use_exp_adap: bool = False,
+):
     if args is None:
         args = tyro.cli(RolloutConfig)
 
@@ -782,6 +809,7 @@ def main(args: RolloutConfig | None = None, *, x_emb: dict[str, float] | None = 
         robocasa_split=args.robocasa_split,
         no_video=args.no_video,
         x_emb=x_emb,
+        use_exp_adap=use_exp_adap,
     )
     return results
 

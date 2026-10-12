@@ -33,6 +33,18 @@ def test_unit_scales_preserve_xml_exactly():
     assert scale_robot_xml(xml, parse_x_emb('{"link2": 1, "link4": 1.0}')) == xml
 
 
+@pytest.mark.parametrize(
+    "flag", ["--use_exp_adap", "--use-exp-adap", "--use_ext_adap", "--use-ext-adap"]
+)
+def test_expert_adaptation_cli_aliases(flag):
+    from scripts.eval_robocasa_gui_x_emb import parse_args
+
+    assert parse_args([flag]).use_exp_adap
+    assert parse_args([f"{flag}=True"]).use_exp_adap
+    assert not parse_args([f"{flag}=False"]).use_exp_adap
+    assert not parse_args([]).use_exp_adap
+
+
 @pytest.fixture(scope="module")
 def panda_xml():
     pytest.importorskip("robosuite")

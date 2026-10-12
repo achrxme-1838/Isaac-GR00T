@@ -56,6 +56,27 @@ gr00t/eval/sim/robocasa/robocasa_uv/.venv/bin/python \
   --seed 0
 ```
 
+녹화하려면 위 명령 끝에 `--record_vid`를 추가한다. 녹화 중에는 GUI 창을 열지 않는다.
+아래처럼 실행하면 팔과 작업 대상이 보이는 왼쪽 측면 카메라를 960×720 MP4로 저장한다.
+
+```bash
+cd /home/lim/rl_ws/Isaac-GR00T
+unset PYTHONPATH PYTHONHOME PYOPENGL_PLATFORM
+MUJOCO_GL=egl \
+gr00t/eval/sim/robocasa/robocasa_uv/.venv/bin/python \
+  scripts/eval_robocasa_gui.py \
+  --env-name robocasa_panda_omron/OpenDrawer_PandaOmron_Env \
+  --n-episodes 10 --max-episode-steps 720 --n-action-steps 8 --seed 0 \
+  --record_vid
+```
+
+저장 위치는 `eval_videos/gui_<시각>/episode_001.mp4`부터 시작한다.
+`--video-dir PATH`로 저장 폴더를 지정할 수 있고, 기존 파일은 덮어쓰지 않는다.
+`--record-camera robot0_agentview_right`로 오른쪽 측면 카메라를 선택할 수 있다.
+에피소드 종료 또는 `Ctrl+C` 시 지금까지 녹화한 영상을 마무리한다.
+`eval_robocasa_gui_x_emb.py`에도 같은 옵션을 사용할 수 있으며,
+`--use_exp_adap`와 함께 쓰면 반투명 가상 팔도 영상에 포함된다.
+
 ## 4. 평가 결과를 비디오로 저장 — 터미널 2
 
 GUI 창 없이 10개 에피소드를 평가하고, 측면 카메라 2개와 손목 카메라 1개를
@@ -112,10 +133,20 @@ gr00t/eval/sim/robocasa/robocasa_uv/.venv/bin/python \
   --max-episode-steps 720 --n-action-steps 8 \
   --video-dir "$PWD/eval_videos/open_drawer_x_emb" \
   --seed 0 \
-  --x_emb '{"link2": 1.2, "link4": 1.2}'
+  --x_emb '{"link2": 1.2, "link4": 1.2}' \
+  --use_exp_adap=True
 ```
 
 이 명령에도 `--no_video`를 추가하면 영상 없이 결과 JSON만 저장한다.
+`--use_exp_adap=True`는 GUI 버전과 같은 FK→IK 관측 변환을 적용한다.
+끄려면 `--use_exp_adap=False`로 바꾸거나 옵션을 생략한다.
+적용 여부는 결과 JSON의 `config.use_exp_adap`에 기록된다.
+변형된 팔에 관측 변환을 적용하면 에피소드별 IK 최대 위치·회전 오차와 허용치 초과 비율을
+출력하고 `episode_infos.exp_adap_ik`에 저장한다(`--no_video`에서도 동일).
+위치 오차 단위는 m, 회전은 rad, 비율은 0~1이며 reset 관측과 모든 환경 스텝을 포함한다.
+GUI 실행에서도 에피소드 종료 시 같은 통계를 터미널에 출력한다.
+GUI의 `--use_exp_adap`(`--use_ext_adap`도 동일)은 원래 길이의 팔에 가상 관절각을 적용한
+반투명 청록색 모델을 함께 표시한다. 이 표시는 정책 카메라 영상과 물리 계산에 포함되지 않는다.
 `success_rate`는 0~1 사이 값이다. 예를 들어 `0.7`은 성공률 70%이다.
 
 ## 다른 모델 또는 환경으로 변경
