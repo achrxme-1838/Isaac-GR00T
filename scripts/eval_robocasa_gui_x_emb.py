@@ -18,6 +18,10 @@ gr00t/eval/sim/robocasa/robocasa_uv/.venv/bin/python \
                         원래 길이의 팔 + 가상 관절각을 반투명 청록색으로 겹쳐 표시
 --use_ext_adap         : --use_exp_adap=True와 동일한 별칭
 --use_exp_adap=False   : 변형된 팔의 실제 관측 사용 (기본값)
+--sync_init=True      : 매 reset에 변형 전 로봇의 초기 gripper 위치·자세를 기준으로
+                        변형된 팔의 실제 관절값을 IK로 맞춘다 (기본값 False).
+                        원래 장면·베이스·몸통·그리퍼 개폐 상태를 유지한다.
+                        관절 한계 내에서 맞출 수 없으면 오류로 중단한다.
 --record_vid          : GUI 없이 왼쪽 측면 뷰(팔 + 작업 대상)를 960x720 MP4로 저장
                         원래 카메라보다 0.5m 뒤에서 촬영
                         eval_videos/gui_<시각>/episode_NNN.mp4 (반투명 팔도 포함)
@@ -79,6 +83,15 @@ def parse_args(argv=None):
         "--x_emb", "--x-emb", type=parse_x_emb, default={}, help="JSON link length ratios"
     )
     parser.add_argument(
+        "--sync_init",
+        "--sync-init",
+        type=parse_bool,
+        nargs="?",
+        const=True,
+        default=False,
+        help="Match the physical initial gripper pose to the nominal robot using IK.",
+    )
+    parser.add_argument(
         "--use_exp_adap",
         "--use-exp-adap",
         "--use_ext_adap",
@@ -113,12 +126,18 @@ def main():
 
     print(f"Link length ratios: {args.x_emb or 'original robot'}", flush=True)
     print(f"Expert observation adaptation: {args.use_exp_adap}", flush=True)
+    print(f"Synchronize initial gripper pose: {args.sync_init}", flush=True)
     with PolicyClient(
         host=args.policy_client_host, port=args.policy_client_port, timeout_ms=120000
     ) as policy:
         contract = PolicyHorizonSpec.from_policy(policy, n_action_steps=args.n_action_steps)
         raw_env = gym.make(args.env_name, enable_render=True, seed=args.seed)
-        configure_x_emb(raw_env, args.x_emb)
+        if args.sync_init:
+            from gr00t.eval.sim.robocasa_sync_init import SyncInitialPoseWrapper
+
+            raw_env = SyncInitialPoseWrapper(raw_env, args.x_emb)
+        else:
+            configure_x_emb(raw_env, args.x_emb)
         overlay_factory = None
         if args.use_exp_adap:
             from gr00t.eval.sim.robocasa_exp_adaptation import ExpertAdaptationWrapper

@@ -16,9 +16,22 @@ eval_videos/gui_<timestamp>/episode_NNN.mp4 using robot0_agentview_left (arm and
 The recording camera is pulled back 0.5 m to keep more of the arm in view.
 Without --record_vid, the interactive GUI opens as usual.
 Use --video-dir PATH or --record-camera robot0_agentview_right to override these defaults.
+
+Optional PandaOmron perturbations (all disabled by default):
+  --initial_ee_pos [RADIUS_M] : move the initial EE by exactly RADIUS_M in a random direction
+                               on the sphere surface, preserving orientation via IK
+                               (default radius when enabled: 0.05 m).
+  --random_joint [AMPLITUDE_RAD] : add independent uniform +/- joint offsets at reset
+                                   (default amplitude when enabled: 0.1 rad), within limits.
+  --no_vel : zero the seven arm joint velocities at reset and before/after every env step.
+             Physics still integrates normally within each control step.
+The sphere and sampled target are shown only in the GUI/recording. Random offsets use
+the episode seed. When combined, EE relocation runs first, then joint noise; the final
+EE position can therefore leave the sphere. Base, torso and gripper are not perturbed.
 """
 
 import argparse
+import math
 from pathlib import Path
 import time
 
@@ -158,11 +171,48 @@ def parse_args(argv=None):
     parser.add_argument("--max-episode-steps", type=int, default=720)
     parser.add_argument("--n-action-steps", type=int, default=8)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--initial_ee_pos",
+        "--initial-ee-pos",
+        type=nonnegative_float,
+        nargs="?",
+        const=0.05,
+        default=0.0,
+        metavar="RADIUS_M",
+        help="Fixed initial EE displacement in a random direction (metres; flag alone: 0.05; default: off).",
+    )
+    parser.add_argument(
+        "--random_joint",
+        "--random-joint",
+        type=nonnegative_float,
+        nargs="?",
+        const=0.1,
+        default=0.0,
+        metavar="AMPLITUDE_RAD",
+        help="Uniform +/- initial arm joint noise (radians; flag alone: 0.1; default: off).",
+    )
+    parser.add_argument(
+        "--no_vel",
+        "--no-vel",
+        action="store_true",
+        help="Zero physical arm joint velocities at reset and before/after every env step.",
+    )
     add_recording_args(parser)
     args = parser.parse_args(argv)
     if min(args.n_episodes, args.max_episode_steps, args.n_action_steps) < 1:
         parser.error("Episode and step counts must be positive.")
+    if (args.initial_ee_pos or args.random_joint or args.no_vel) and not args.env_name.startswith(
+        "robocasa_panda_omron/"
+    ):
+        parser.error("Perturbations currently support robocasa_panda_omron environments only.")
     return args
+
+
+def nonnegative_float(value):
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError("Expected a finite, nonnegative number.")
+    return number
 
 
 def main():
@@ -177,8 +227,22 @@ def main():
         host=args.policy_client_host, port=args.policy_client_port, timeout_ms=120000
     ) as policy:
         contract = PolicyHorizonSpec.from_policy(policy, n_action_steps=args.n_action_steps)
+        raw_env = gym.make(args.env_name, enable_render=True, seed=args.seed)
+        overlay_factory = None
+        if args.initial_ee_pos or args.random_joint or args.no_vel:
+            from gr00t.eval.sim.robocasa_perturbations import PandaPerturbationWrapper
+
+            raw_env = PandaPerturbationWrapper(
+                raw_env,
+                initial_ee_pos=args.initial_ee_pos,
+                random_joint=args.random_joint,
+                no_vel=args.no_vel,
+            )
+            if args.initial_ee_pos:
+                overlay_factory = raw_env.make_overlay
         gui = GuiWrapper(
-            gym.make(args.env_name, enable_render=True, seed=args.seed),
+            raw_env,
+            overlay_factory=overlay_factory,
             video_dir=recording_directory(args),
             record_camera=args.record_camera,
         )

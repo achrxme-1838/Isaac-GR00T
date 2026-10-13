@@ -45,6 +45,16 @@ def test_expert_adaptation_cli_aliases(flag):
     assert not parse_args([]).use_exp_adap
 
 
+@pytest.mark.parametrize("flag", ["--sync_init", "--sync-init"])
+def test_sync_init_cli_aliases(flag):
+    from scripts.eval_robocasa_gui_x_emb import parse_args
+
+    assert not parse_args([]).sync_init
+    assert parse_args([flag]).sync_init
+    assert parse_args([f"{flag}=True"]).sync_init
+    assert not parse_args([f"{flag}=False"]).sync_init
+
+
 @pytest.fixture(scope="module")
 def panda_xml():
     pytest.importorskip("robosuite")

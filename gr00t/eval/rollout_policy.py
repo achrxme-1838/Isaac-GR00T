@@ -185,6 +185,7 @@ def create_eval_env(
     robocasa_split: str = "",
     x_emb: dict[str, float] | None = None,
     use_exp_adap: bool = False,
+    sync_init: bool = False,
 ) -> gym.Env:
     """Create a single evaluation environment with wrappers.
 
@@ -196,10 +197,16 @@ def create_eval_env(
         Wrapped gymnasium environment
     """
 
-    if (x_emb is not None or use_exp_adap) and not env_name.startswith("robocasa_panda_omron/"):
+    if (x_emb is not None or use_exp_adap or sync_init) and not env_name.startswith(
+        "robocasa_panda_omron/"
+    ):
         raise ValueError("Embodiment changes/adaptation support robocasa_panda_omron only.")
     env = get_gym_env(env_name, env_idx, total_n_envs, robocasa_split=robocasa_split)
-    if x_emb:
+    if sync_init:
+        from gr00t.eval.sim.robocasa_sync_init import SyncInitialPoseWrapper
+
+        env = SyncInitialPoseWrapper(env, x_emb or {})
+    elif x_emb:
         from gr00t.eval.sim.robocasa_x_emb import configure_x_emb
 
         configure_x_emb(env, x_emb)
@@ -435,6 +442,7 @@ def run_rollout_gymnasium_policy(
     robocasa_split: str = "",
     x_emb: dict[str, float] | None = None,
     use_exp_adap: bool = False,
+    sync_init: bool = False,
 ) -> Any:
     """Run policy rollouts in parallel environments.
 
@@ -467,6 +475,7 @@ def run_rollout_gymnasium_policy(
             robocasa_split=robocasa_split,
             x_emb=x_emb,
             use_exp_adap=use_exp_adap,
+            sync_init=sync_init,
         )
         for idx in range(n_envs)
     ]
@@ -622,10 +631,13 @@ def run_gr00t_sim_policy(
     no_video: bool = False,
     x_emb: dict[str, float] | None = None,
     use_exp_adap: bool = False,
+    sync_init: bool = False,
 ):
     if min(n_episodes, n_envs, max_episode_steps, n_action_steps) < 1:
         raise ValueError("Episode, environment and step counts must be positive.")
-    if (x_emb is not None or use_exp_adap) and not env_name.startswith("robocasa_panda_omron/"):
+    if (x_emb is not None or use_exp_adap or sync_init) and not env_name.startswith(
+        "robocasa_panda_omron/"
+    ):
         raise ValueError("Embodiment changes/adaptation support robocasa_panda_omron only.")
     # seed_everything resolves `None` via the GR00T_EVAL_SEED env var and is a
     # no-op when that is also unset, so the historical non-deterministic
@@ -695,6 +707,7 @@ def run_gr00t_sim_policy(
             robocasa_split=robocasa_split,
             x_emb=x_emb,
             use_exp_adap=use_exp_adap,
+            sync_init=sync_init,
         )
         if not no_video:
             print("Video saved to: ", wrapper_configs.video.video_dir)
@@ -714,6 +727,7 @@ def run_gr00t_sim_policy(
                 "no_video": no_video,
                 "x_emb": x_emb or {},
                 "use_exp_adap": use_exp_adap,
+                "sync_init": sync_init,
                 "trt_engine_path": trt_engine_path,
                 "trt_mode": str(trt_mode),
             },
@@ -779,6 +793,7 @@ def main(
     *,
     x_emb: dict[str, float] | None = None,
     use_exp_adap: bool = False,
+    sync_init: bool = False,
 ):
     if args is None:
         args = tyro.cli(RolloutConfig)
@@ -810,6 +825,7 @@ def main(
         no_video=args.no_video,
         x_emb=x_emb,
         use_exp_adap=use_exp_adap,
+        sync_init=sync_init,
     )
     return results
 

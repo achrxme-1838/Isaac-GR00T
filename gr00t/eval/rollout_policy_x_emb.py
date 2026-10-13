@@ -25,6 +25,10 @@ joint_position, sin/cos, joint_velocity를 환산한다. 액션과 영상은 그
 에피소드별 IK 최대 오차·허용치 초과 횟수·비율을 출력하고 JSON의 episode_infos.exp_adap_ik에
 저장한다. reset 관측과 모든 내부 환경 스텝을 집계하며 failure_rate는 0~1이다.
 
+--sync_init=True이면 매 reset에 변형 전 로봇의 초기 gripper 위치·자세와 같도록
+변형된 팔의 실제 관절값을 IK로 맞춘다. 장면·베이스·몸통·그리퍼 개폐는 유지한다.
+기본값은 False이며 config.sync_init에 기록된다. IK가 맞출 수 없으면 오류로 중단한다.
+
 이름 / 늘어나는 구간 / 로컬 축 / 원래 축 방향 길이:
   link0 : 팔 밑동 -> 관절 1       / Z / 0.333 m
   link2 : 상완, 관절 2 -> 3       / Y / 0.316 m
@@ -52,6 +56,8 @@ class XEmbRolloutConfig(RolloutConfig):
     """JSON link length ratios, e.g. '{"link2": 1.2, "link4": 1.2}'."""
     use_exp_adap: tyro.conf.FlagConversionOff[bool] = False
     """Map joint observations through changed FK and nominal pose IK (True/False)."""
+    sync_init: tyro.conf.FlagConversionOff[bool] = False
+    """Match the physical initial gripper pose to the nominal robot using IK (True/False)."""
 
 
 def main():
@@ -62,7 +68,8 @@ def main():
         raise SystemExit(f"--x_emb: {exc}") from exc
     print(f"Link length ratios: {scales or 'original robot'}", flush=True)
     print(f"Expert observation adaptation: {args.use_exp_adap}", flush=True)
-    return run_rollout(args, x_emb=scales, use_exp_adap=args.use_exp_adap)
+    print(f"Synchronize initial gripper pose: {args.sync_init}", flush=True)
+    return run_rollout(args, x_emb=scales, use_exp_adap=args.use_exp_adap, sync_init=args.sync_init)
 
 
 if __name__ == "__main__":

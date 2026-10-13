@@ -78,12 +78,26 @@ class TinyPolicy:
 @pytest.mark.parametrize("no_video", [False, True])
 @pytest.mark.parametrize("x_emb", [None, {"link2": 1.2}])
 @pytest.mark.parametrize("use_exp_adap", [False, True])
-def test_rollout_saves_metrics_after_close(monkeypatch, tmp_path, no_video, x_emb, use_exp_adap):
+@pytest.mark.parametrize("sync_init", [False, True])
+def test_rollout_saves_metrics_after_close(
+    monkeypatch, tmp_path, no_video, x_emb, use_exp_adap, sync_init
+):
     if not no_video and shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg is not installed")
     env = TinyEnv()
     configured = []
     adapted = []
+    synced = []
+
+    class TestSync(gym.Wrapper):
+        def __init__(self, raw_env, scales):
+            assert raw_env is env  # Synchronization precedes video and adaptation wrappers.
+            super().__init__(raw_env)
+            synced.append(scales)
+
+    sync_module = ModuleType("gr00t.eval.sim.robocasa_sync_init")
+    sync_module.SyncInitialPoseWrapper = TestSync
+    monkeypatch.setitem(sys.modules, sync_module.__name__, sync_module)
 
     class TestAdapter(gym.ObservationWrapper):
         def __init__(self, env, scales):
@@ -130,6 +144,7 @@ def test_rollout_saves_metrics_after_close(monkeypatch, tmp_path, no_video, x_em
         no_video=no_video,
         x_emb=x_emb,
         use_exp_adap=use_exp_adap,
+        sync_init=sync_init,
         seed=0,
     )
     reports = list(tmp_path.glob("results_*.json"))
@@ -143,9 +158,11 @@ def test_rollout_saves_metrics_after_close(monkeypatch, tmp_path, no_video, x_em
     assert report["config"]["x_emb"] == (x_emb or {})
     assert report["config"]["no_video"] is no_video
     assert report["config"]["use_exp_adap"] is use_exp_adap
+    assert report["config"]["sync_init"] is sync_init
     assert report["config"]["seed"] == 0
-    assert configured == ([] if x_emb is None else [x_emb])
+    assert configured == ([] if x_emb is None or sync_init else [x_emb])
     assert adapted == ([x_emb or {}] if use_exp_adap else [])
+    assert synced == ([x_emb or {}] if sync_init else [])
     videos = list(tmp_path.glob("*.mp4"))
     assert len(videos) == (0 if no_video else 2)
     assert all(video.stat().st_size > 0 for video in videos)
@@ -173,22 +190,32 @@ def test_no_video_cli_aliases(config_type, flag):
 
 
 @pytest.mark.parametrize("use_exp_adap", [False, True])
-def test_x_emb_cli_forwards_json_and_no_video(monkeypatch, use_exp_adap):
+@pytest.mark.parametrize("sync_init", [False, True])
+@pytest.mark.parametrize("sync_flag", ["--sync_init", "--sync-init"])
+def test_x_emb_cli_forwards_json_and_no_video(monkeypatch, use_exp_adap, sync_init, sync_flag):
     captured = []
     args = tyro.cli(
         rollout_policy_x_emb.XEmbRolloutConfig,
-        args=["--x_emb", '{"link2": 1.2}', "--no_video", f"--use_exp_adap={use_exp_adap}"],
+        args=[
+            "--x_emb",
+            '{"link2": 1.2}',
+            "--no_video",
+            f"--use_exp_adap={use_exp_adap}",
+            f"{sync_flag}={sync_init}",
+        ],
     )
     monkeypatch.setattr(rollout_policy_x_emb.tyro, "cli", lambda *a: args)
     monkeypatch.setattr(
         rollout_policy_x_emb, "run_rollout", lambda cfg, **kw: captured.append((cfg, kw))
     )
     rollout_policy_x_emb.main()
-    assert captured == [(args, {"x_emb": {"link2": 1.2}, "use_exp_adap": use_exp_adap})]
+    assert captured == [
+        (args, {"x_emb": {"link2": 1.2}, "use_exp_adap": use_exp_adap, "sync_init": sync_init})
+    ]
     assert args.no_video
 
 
-def test_shared_main_forwards_expert_adaptation(monkeypatch):
+def test_shared_main_forwards_expert_adaptation_and_sync_init(monkeypatch):
     captured = {}
 
     def capture_run(**kwargs):
@@ -198,8 +225,9 @@ def test_shared_main_forwards_expert_adaptation(monkeypatch):
     args = rollout_policy_x_emb.XEmbRolloutConfig(
         policy_client_host="127.0.0.1", policy_client_port=5555
     )
-    rollout_policy.main(args, x_emb={"link2": 1.2}, use_exp_adap=True)
+    rollout_policy.main(args, x_emb={"link2": 1.2}, use_exp_adap=True, sync_init=True)
     assert captured["use_exp_adap"] is True
+    assert captured["sync_init"] is True
     assert captured["x_emb"] == {"link2": 1.2}
 
 
