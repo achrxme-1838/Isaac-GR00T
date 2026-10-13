@@ -31,6 +31,9 @@ export HF_HUB_DISABLE_XET=1
 
 GROOT_DATA_DIR="$PWD/data/PhysicalAI-Robotics-GR00T-X-Embodiment-Sim"
 DATASET_PATH="$GROOT_DATA_DIR/single_panda_gripper.OpenDrawer"
+# Default: all state fields. Override when submitting to exclude arm joint state:
+# MODALITY_CONFIG_PATH=scripts/open_drawer_no_joint_state_config.py sbatch scripts/finetune_open_drawer.sh
+MODALITY_CONFIG_PATH="${MODALITY_CONFIG_PATH:-$PWD/scripts/open_drawer_default_config.py}"
 
 export NUM_GPUS="$SLURM_GPUS_ON_NODE"
 export GLOBAL_BATCH_SIZE=$((NUM_GPUS * 4))
@@ -46,6 +49,7 @@ bash examples/finetune.sh \
     --base-model-path nvidia/GR00T-N1.7-3B \
     --dataset-path "$DATASET_PATH" \
     --embodiment-tag ROBOCASA_PANDA_OMRON \
+    --modality-config-path "$MODALITY_CONFIG_PATH" \
     --output-dir "$PWD/outputs/open_drawer_n17_$RUN_TIMESTAMP" \
     -- \
     --gradient-accumulation-steps 8 \
