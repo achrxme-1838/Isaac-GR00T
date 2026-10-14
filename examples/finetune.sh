@@ -27,6 +27,10 @@ USE_PERCENTILES=""
 SHORTEST_IMAGE_EDGE=""
 CROP_FRACTION=""
 EXTRA_ARGS=()
+EVAL_STEPS="${EVAL_STEPS:-0}"
+EVAL_TASKS="${EVAL_TASKS:-}"
+EVAL_PYTHON="${EVAL_PYTHON:-}"
+EVAL_ARGS=()
 
 usage() {
     cat <<'EOF'
@@ -44,7 +48,20 @@ Usage: bash examples/finetune.sh \
   [--ds-weights-alpha <value>] \
   [--save-only-model] \
   [--resume-from-checkpoint] \
+  [--eval-steps <optimizer-steps>] \
+  [--eval-tasks "<gym-env-id> [<gym-env-id> ...]"] \
+  [--eval-python <simulator-python>] \
+  [--eval-n-episodes <count>] [--eval-n-envs <count>] \
+  [--eval-max-episode-steps <steps>] [--eval-n-action-steps <steps>] \
+  [--eval-seed <seed>] [--eval-robocasa-split <split>] \
+  [--eval-timeout <seconds-per-task>] \
   [-- <extra launch_finetune.py args>...]
+
+Rollout evaluation is disabled by default (--eval-steps 0). When enabled,
+it pauses training every N optimizer steps, evaluates the selected Gym tasks,
+and logs metrics to the training W&B run (when USE_WANDB=1). Simulator
+dependencies/assets must be installed for --eval-python. EVAL_STEPS,
+EVAL_TASKS (space-separated), and EVAL_PYTHON can also be set in the environment.
 EOF
 }
 
@@ -109,6 +126,27 @@ while [ "$#" -gt 0 ]; do
         --resume-from-checkpoint)
             RESUME_FROM_CHECKPOINT=1
             shift
+            ;;
+        --eval-steps)
+            EVAL_STEPS="$2"
+            shift 2
+            ;;
+        --eval-tasks)
+            EVAL_TASKS="$2"
+            shift 2
+            # Accept both a quoted list and multiple individual environment IDs.
+            while [ "$#" -gt 0 ] && [[ "$1" != --* ]]; do
+                EVAL_TASKS+=" $1"
+                shift
+            done
+            ;;
+        --eval-python)
+            EVAL_PYTHON="$2"
+            shift 2
+            ;;
+        --eval-n-episodes|--eval-n-envs|--eval-max-episode-steps|--eval-n-action-steps|--eval-seed|--eval-robocasa-split|--eval-timeout)
+            EVAL_ARGS+=("$1" "$2")
+            shift 2
             ;;
         --help|-h)
             usage
@@ -208,6 +246,16 @@ fi
 if [ -n "${RESUME_FROM_CHECKPOINT:-}" ]; then
     LAUNCH_CMD+=(--resume_from_checkpoint)
 fi
+
+LAUNCH_CMD+=(--eval-steps "$EVAL_STEPS")
+if [ -n "$EVAL_TASKS" ]; then
+    read -r -a EVAL_TASK_ARGS <<< "$EVAL_TASKS"
+    LAUNCH_CMD+=(--eval-tasks "${EVAL_TASK_ARGS[@]}")
+fi
+if [ -n "$EVAL_PYTHON" ]; then
+    LAUNCH_CMD+=(--eval-python "$EVAL_PYTHON")
+fi
+LAUNCH_CMD+=("${EVAL_ARGS[@]}")
 
 if [ "${#EXTRA_ARGS[@]}" -gt 0 ]; then
     LAUNCH_CMD+=("${EXTRA_ARGS[@]}")

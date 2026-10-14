@@ -167,6 +167,7 @@ class PolicyServer:
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
         self.socket.bind(f"tcp://{host}:{port}")
+        self.port = int(self.socket.getsockopt_string(zmq.LAST_ENDPOINT).rsplit(":", 1)[1])
         self._endpoints: dict[str, EndpointHandler] = {}
         self.api_token = api_token
 
@@ -242,35 +243,40 @@ class PolicyServer:
         addr = self.socket.getsockopt_string(zmq.LAST_ENDPOINT)
         print(f"Server is ready and listening on {addr}")
         while self.running:
-            try:
-                message = self.socket.recv()
-                request = MsgSerializer.from_bytes(message)
+            self.run_once()
 
-                # Validate token before processing request
-                if not self._validate_token(request):
-                    self.socket.send(
-                        MsgSerializer.to_bytes({"error": "Unauthorized: Invalid API token"})
-                    )
-                    continue
+    def run_once(self, timeout_ms: int = -1) -> bool:
+        """Serve at most one request, allowing a caller to monitor a rollout child."""
+        if not self.socket.poll(timeout_ms, zmq.POLLIN):
+            return False
+        message = self.socket.recv()
+        try:
+            request = MsgSerializer.from_bytes(message)
 
-                endpoint = request.get("endpoint", "get_action")
-
-                if endpoint not in self._endpoints:
-                    raise ValueError(f"Unknown endpoint: {endpoint}")
-
-                handler = self._endpoints[endpoint]
-                result = (
-                    handler.handler(**request.get("data", {}))
-                    if handler.requires_input
-                    else handler.handler()
+            if not self._validate_token(request):
+                self.socket.send(
+                    MsgSerializer.to_bytes({"error": "Unauthorized: Invalid API token"})
                 )
-                self.socket.send(MsgSerializer.to_bytes(result))
-            except Exception as e:
-                print(f"Error in server: {e}")
-                import traceback
+                return True
 
-                print(traceback.format_exc())
-                self.socket.send(MsgSerializer.to_bytes({"error": str(e)}))
+            endpoint = request.get("endpoint", "get_action")
+            if endpoint not in self._endpoints:
+                raise ValueError(f"Unknown endpoint: {endpoint}")
+
+            handler = self._endpoints[endpoint]
+            result = (
+                handler.handler(**request.get("data", {}))
+                if handler.requires_input
+                else handler.handler()
+            )
+            self.socket.send(MsgSerializer.to_bytes(result))
+        except Exception as e:
+            print(f"Error in server: {e}")
+            import traceback
+
+            print(traceback.format_exc())
+            self.socket.send(MsgSerializer.to_bytes({"error": str(e)}))
+        return True
 
     @staticmethod
     def start_server(policy: BasePolicy, port: int, host: str = "*", api_token: str = None):

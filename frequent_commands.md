@@ -150,6 +150,51 @@ GUI의 `--use_exp_adap`(`--use_ext_adap`도 동일)은 원래 길이의 팔에 �
 반투명 청록색 모델을 함께 표시한다. 이 표시는 정책 카메라 영상과 물리 계산에 포함되지 않는다.
 `success_rate`는 0~1 사이 값이다. 예를 들어 `0.7`은 성공률 70%이다.
 
+## 6. 학습 중 선택한 task 평가 및 W&B 기록
+
+`examples/finetune.sh`에 아래 옵션을 추가하면 5,000 optimizer step마다
+선택한 task를 각각 10 episode 평가한다. 여러 task는 공백으로 구분한다.
+
+```bash
+bash examples/finetune.sh \
+  --base-model-path nvidia/GR00T-N1.7-3B \
+  --dataset-path "$PWD/data/PhysicalAI-Robotics-GR00T-X-Embodiment-Sim/single_panda_gripper.OpenDrawer" \
+  --embodiment-tag ROBOCASA_PANDA_OMRON \
+  --output-dir "$PWD/outputs/open_drawer_with_eval" \
+  --eval-steps 5000 \
+  --eval-tasks "robocasa_panda_omron/OpenDrawer_PandaOmron_Env robocasa_panda_omron/OpenSingleDoor_PandaOmron_Env" \
+  --eval-python "$PWD/gr00t/eval/sim/robocasa/robocasa_uv/.venv/bin/python" \
+  --eval-n-episodes 10 \
+  --eval-n-envs 1 \
+  --eval-max-episode-steps 720 \
+  --eval-n-action-steps 8 \
+  --eval-seed 0
+```
+
+- `--eval-steps`는 gradient accumulation 이후 optimizer step 기준이며
+  `SAVE_STEPS`와 독립적이다. 기본값 `0`은 평가 비활성화다.
+- `USE_WANDB=1`(기본값)이면 같은 학습 run에
+  `eval/rollout/<task>/success_rate`, `mean_reward`, `mean_length`,
+  `n_successes`, `n_episodes`를 `train/global_step` 기준으로 기록한다.
+  `eval/rollout/success_rate`는 task별 성공률의 산술평균이다.
+- W&B를 꺼도 `<output-dir>/rollout_eval/step-<step>-*/` 아래에
+  통합 `metrics.json`, task별 결과 JSON과 `rollout.log`를 저장한다.
+  이 평가는 영상 녹화 없이 실행한다.
+- 평가 동안 학습을 잠시 멈추고 rank 0의 현재 가중치로 추론한다.
+  별도 모델 서버 실행이나 체크포인트 저장은 필요 없다. 단일 GPU,
+  DDP, DeepSpeed ZeRO 1/2를 지원한다. ZeRO 3/FSDP는 지원하지 않는다.
+- 학습 노드에 simulator Python 환경과 RoboCasa asset이 설치되어 있어야 한다.
+  `--eval-timeout`은 task당 제한 시간(기본 3,600초)이다. 평가 오류나 timeout은
+  학습을 중단하고 로그 위치를 표시한다. `--eval-robocasa-split`으로 split도 지정할 수 있다.
+
+`scripts/finetune_open_drawer.sh`는 기본적으로 OpenDrawer를 5,000 step마다 평가한다.
+Slurm 제출 시 `EVAL_STEPS`, `EVAL_TASKS`, `EVAL_PYTHON`으로 변경할 수 있다.
+
+```bash
+EVAL_STEPS=10000 sbatch scripts/finetune_open_drawer.sh
+EVAL_STEPS=0 sbatch scripts/finetune_open_drawer.sh
+```
+
 ## 다른 모델 또는 환경으로 변경
 
 - 모델 변경: 2번의 `--model-path`를 수정하고 모델 서버를 다시 실행한다.

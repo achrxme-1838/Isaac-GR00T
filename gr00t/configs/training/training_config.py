@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 import warnings
 
+from gr00t.configs.rollout_eval_config import RolloutEvalConfig
+
 
 @dataclass
 class TrainingConfig:
@@ -89,6 +91,8 @@ class TrainingConfig:
     save_best_eval_metric_name: str = ""
     save_best_eval_metric_greater_is_better: bool = True
 
+    rollout_eval: RolloutEvalConfig = field(default_factory=RolloutEvalConfig)
+
     # DeepSpeed (default)
     deepspeed_stage: int = 2  # ZeRO stage (1, 2, or 3)
     gradient_checkpointing: bool = False
@@ -149,6 +153,10 @@ class TrainingConfig:
         return global_batch * self.gradient_accumulation_steps
 
     def __post_init__(self) -> None:
+        # Config.load_dict reconstructs TrainingConfig from plain YAML mappings.
+        if isinstance(self.rollout_eval, dict):
+            self.rollout_eval = RolloutEvalConfig(**self.rollout_eval)
+        self.rollout_eval.validate()
         if self.gradient_accumulation_steps < 1:
             raise ValueError(
                 f"gradient_accumulation_steps must be >= 1, got {self.gradient_accumulation_steps}"

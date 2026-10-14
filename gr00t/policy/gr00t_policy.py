@@ -124,6 +124,30 @@ class Gr00tPolicy(BasePolicy):
         self.processor: BaseProcessor = AutoProcessor.from_pretrained(processor_dir)
         self.processor.eval()
 
+        self._configure_embodiment(embodiment_tag)
+
+    @classmethod
+    def from_model(
+        cls,
+        embodiment_tag: EmbodimentTag | str,
+        model: torch.nn.Module,
+        processor: BaseProcessor,
+        *,
+        strict: bool = True,
+    ) -> "Gr00tPolicy":
+        """Wrap existing weights without loading, moving, or casting the model.
+
+        The caller owns model/processor modes and the autocast context. This is
+        useful for evaluation during training without a second GPU model copy.
+        """
+        policy = cls.__new__(cls)
+        BasePolicy.__init__(policy, strict=strict)
+        policy.model = model
+        policy.processor = processor
+        policy._configure_embodiment(EmbodimentTag.resolve(embodiment_tag))
+        return policy
+
+    def _configure_embodiment(self, embodiment_tag: EmbodimentTag) -> None:
         # Store embodiment-specific configurations
         self.embodiment_tag = embodiment_tag
         all_modality_configs = self.processor.get_modality_configs()

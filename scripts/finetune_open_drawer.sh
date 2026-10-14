@@ -44,6 +44,10 @@ export USE_WANDB=1
 export WANDB_MODE=online
 export MASTER_PORT=$((20000 + SLURM_JOB_ID % 20000))
 
+export EVAL_STEPS="${EVAL_STEPS:-10000}"
+export EVAL_TASKS="${EVAL_TASKS:-robocasa_panda_omron/OpenDrawer_PandaOmron_Env}"
+export EVAL_PYTHON="${EVAL_PYTHON:-$PWD/gr00t/eval/sim/robocasa/robocasa_uv/.venv/bin/python}"
+
 unset RESUME_FROM_CHECKPOINT SAVE_ONLY_MODEL
 bash examples/finetune.sh \
     --base-model-path nvidia/GR00T-N1.7-3B \

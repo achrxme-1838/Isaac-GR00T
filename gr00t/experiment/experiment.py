@@ -193,6 +193,7 @@ def run(config: Config):
     """Main training function."""
     warn_configs(config)
     check_resume_compatibility(config.training)
+    config.training.rollout_eval.validate()
 
     global_rank = _init_distributed_process_group()
 
@@ -319,6 +320,13 @@ def run(config: Config):
             processor_dir=processor_dir,
         )
     )
+
+    if config.training.rollout_eval.steps:
+        from gr00t.experiment.rollout_eval import RolloutEvalCallback
+
+        trainer.add_callback(
+            RolloutEvalCallback(trainer, config.training.rollout_eval, processor_dir)
+        )
 
     if config.training.save_best_eval_metric_name != "":
         trainer.add_callback(

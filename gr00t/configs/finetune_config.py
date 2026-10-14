@@ -14,8 +14,10 @@
 # limitations under the License.
 
 # Finetune config used for single node post-training.
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import warnings
+
+from gr00t.configs.rollout_eval_config import RolloutEvalConfig
 
 
 @dataclass
@@ -150,6 +152,25 @@ class FinetuneConfig:
     save_total_limit: int = 5
     """Maximum number of checkpoints to keep before older ones are deleted."""
 
+    # --- Periodic simulator evaluation ---
+    eval_steps: int = 0
+    """Evaluate every N optimizer steps, independently of save_steps. Zero disables evaluation."""
+
+    eval_tasks: list[str] = field(default_factory=list)
+    """Full Gym environment IDs, e.g. robocasa_panda_omron/OpenDrawer_PandaOmron_Env."""
+
+    eval_python: str | None = None
+    """Python executable with simulator dependencies installed; defaults to training Python."""
+
+    eval_n_episodes: int = 10
+    eval_n_envs: int = 1
+    eval_max_episode_steps: int = 720
+    eval_n_action_steps: int = 8
+    eval_seed: int = 0
+    eval_robocasa_split: str = ""
+    eval_timeout: int = 3600
+    """Wall time limit per task, in seconds. Evaluation failures stop training with an error."""
+
     num_gpus: int = 1
     """Number of GPUs available for distributed or single-node training."""
 
@@ -197,6 +218,7 @@ class FinetuneConfig:
     Useful for CI/testing to skip the slow checkpoint shard loading."""
 
     def __post_init__(self) -> None:
+        self.rollout_eval_config().validate()
         if self.gradient_accumulation_steps < 1:
             raise ValueError(
                 f"gradient_accumulation_steps must be >= 1, got {self.gradient_accumulation_steps}"
@@ -209,3 +231,17 @@ class FinetuneConfig:
                 f"(× gradient_accumulation_steps={self.gradient_accumulation_steps}).",
                 stacklevel=2,
             )
+
+    def rollout_eval_config(self) -> RolloutEvalConfig:
+        return RolloutEvalConfig(
+            steps=self.eval_steps,
+            tasks=self.eval_tasks,
+            python=self.eval_python,
+            n_episodes=self.eval_n_episodes,
+            n_envs=self.eval_n_envs,
+            max_episode_steps=self.eval_max_episode_steps,
+            n_action_steps=self.eval_n_action_steps,
+            seed=self.eval_seed,
+            robocasa_split=self.eval_robocasa_split,
+            timeout=self.eval_timeout,
+        )
