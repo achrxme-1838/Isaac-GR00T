@@ -2,12 +2,21 @@
 
 대상은 **Ubuntu 22.04/24.04 + NVIDIA GPU 일반 서버**다. 기존
 [`Dockerfile`](Dockerfile)의 CUDA 12.8 / Python 3.12 / PyTorch 의존성을 사용한다.
-호스트에는 NVIDIA 드라이버, Docker Engine, Compose 플러그인,
-NVIDIA Container Toolkit을 설치한다. Python 패키지와 CUDA Toolkit은 이미지에 들어간다.
+**대상 서버에는 Docker와 NVIDIA Container Toolkit이 설치되어 있고, GPU 컨테이너가
+정상 동작한다고 가정한다.** Python 패키지와 CUDA Toolkit은 이미지에 들어간다.
+아래 명령은 별도 표시가 없으면 대상 서버의 호스트 셸에서 일반 사용자로 실행한다.
 
-## 1. 저장 위치와 마운트 구조
+## 1. 작업 폴더 생성
 
-서버에 로그인한 사용자의 홈 디렉터리 아래에 다음과 같이 둔다.
+대상 서버에서 아래 명령을 그대로 복사해 실행한다. 기존 폴더가 있어도 다시 실행할 수 있다.
+
+```bash
+mkdir -p "$HOME/gr00t_ws"/{models,datasets,outputs,logs,home,cache}
+mkdir -p "$HOME/gr00t_ws/cache"/{uv,huggingface,torch,torch_extensions,triton,cuda}
+cd "$HOME/gr00t_ws"
+```
+
+`Isaac-GR00T/`는 다음 단계의 `git clone`이 생성한다. 최종 폴더 구조는 다음과 같다.
 
 ```text
 ~/gr00t_ws/                         -> 컨테이너 /workspace/gr00t_ws/
@@ -30,146 +39,40 @@ NVIDIA Container Toolkit을 설치한다. Python 패키지와 CUDA Toolkit은 �
 남으며, `~/gr00t_ws` 마운트와는 별개다. 모델과 데이터 외에 이미지 빌드를 위한
 디스크 여유도 확인한다.
 
-## 2. 대상 서버: NVIDIA 드라이버 확인
+## 2. Git으로 소스 가져오기
 
-아래부터 4절까지는 **대상 서버의 호스트 셸**에서 실행한다.
+현재 저장소의 `origin` 주소와 `main` 브랜치를 사용한다. 사용할 브랜치에
+`docker/compose.yaml`, `docker/workspace.sh`, 이 가이드가 커밋/푸시되어 있어야 한다.
+다른 브랜치를 사용한다면 아래 `--branch main`의 `main`을 바꾼다.
 
-```bash
-cat /etc/os-release
-uname -m
-nvidia-smi
-df -h "$HOME" /var/lib
-```
-
-`nvidia-smi`가 GPU와 드라이버를 표시해야 한다. 실패하면 먼저 해당 GPU에서
-CUDA 12.8을 지원하는 NVIDIA 드라이버를 설치/수정한다. 드라이버 설치는
-[NVIDIA 드라이버 설치 안내](https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/index.html)를 따른다.
-드라이버가 정상인 서버에서는 호스트에 `uv`, PyTorch, CUDA Toolkit을 별도로 설치할 필요가 없다.
-
-## 3. 대상 서버: Docker Engine + Compose 설치
-
-Docker Engine과 `docker compose version`이 이미 정상 동작하면 이 설치는 건너뛴다.
-아래는 새 Ubuntu 서버 기준이며, 배포판의 `docker.io` / `containerd` 등이 이미
-설치되어 충돌하면 [Docker 공식 설치 안내](https://docs.docker.com/engine/install/ubuntu/)의
-기존 패키지 정리 절차를 먼저 확인한다.
+Git/Git LFS가 없다면 `sudo apt-get update && sudo apt-get install -y git git-lfs`로 설치한다.
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl gnupg git git-lfs rsync
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-  -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-
-sudo tee /etc/apt/sources.list.d/docker.sources > /dev/null <<EOF
-Types: deb
-URIs: https://download.docker.com/linux/ubuntu
-Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
-Components: stable
-Architectures: $(dpkg --print-architecture)
-Signed-By: /etc/apt/keyrings/docker.asc
-EOF
-
-sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
-  docker-buildx-plugin docker-compose-plugin
-sudo systemctl enable --now docker
-sudo usermod -aG docker "$USER"
-```
-
-이후 **SSH 연결을 끊고 다시 로그인**해서 그룹 변경을 적용한다.
-`docker` 그룹은 호스트 관리 권한을 가지므로 본인 계정에만 적용한다.
-아래의 workspace 스크립트는 일반 사용자로 실행해야 해당 사용자의 UID/GID를 사용한다.
-
-```bash
-docker version
-docker compose version
-docker run --rm hello-world
-```
-
-Docker가 이미 설치된 서버에도 소스 전송용 도구는 필요하다.
-
-```bash
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl gnupg git git-lfs rsync
-```
-
-## 4. 대상 서버: NVIDIA Container Toolkit 설치
-
-[NVIDIA 공식 설치 안내](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)에
-따라 Docker에 GPU 런타임을 연결한다. 마지막 Docker 재시작은 서버에서 실행 중인
-다른 컨테이너에도 영향을 줄 수 있다. 이미 GPU 컨테이너가 동작하면 검증 명령만 실행한다.
-
-```bash
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
-  | sudo gpg --dearmor --yes \
-      -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-
-curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
-  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
-  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
-
-sudo apt-get update
-sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-
-docker run --rm --gpus all \
-  nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi
-```
-
-컨테이너에서도 GPU가 표시되어야 다음 단계로 진행할 수 있다.
-
-## 5. 현재 머신 → 대상 서버: 현재 소스 복사
-
-아직 커밋하지 않은 이번 Docker 파일까지 포함하려면 **현재 머신의 이 저장소에서**
-`rsync`로 복사한다. `USER@SERVER_IP`만 대상 서버 계정/주소로 바꾼다.
-현재 머신에도 `rsync`가 설치되어 있어야 한다.
-
-```bash
-cd /home/lim/rl_ws/Isaac-GR00T
-GR00T_REMOTE='USER@SERVER_IP'
-
-ssh "$GR00T_REMOTE" 'mkdir -p "$HOME/gr00t_ws/Isaac-GR00T"'
-
-rsync -av --info=progress2 \
-  --exclude='.venv/' \
-  --exclude='__pycache__/' \
-  --exclude='.pytest_cache/' \
-  --exclude='.ruff_cache/' \
-  --exclude='.cache/' \
-  --exclude='/outputs/' \
-  --exclude='/logs/' \
-  --exclude='/wandb/' \
-  --exclude='/models/' \
-  --exclude='/checkpoints/' \
-  ./ "$GR00T_REMOTE:gr00t_ws/Isaac-GR00T/"
-```
-
-이 명령은 `.git`, `uv.lock`, 서브모듈의 실제 소스, 저장소 내 작은 데모 데이터도
-전송한다. 기존 대상 파일을 삭제하지는 않으며, 같은 경로의 파일은 현재 소스로 갱신한다.
-별도 모델과 대용량 데이터는 아래처럼 옮긴다. 경로는 실제 위치로 바꾼다.
-
-```bash
-ssh "$GR00T_REMOTE" 'mkdir -p "$HOME/gr00t_ws/models" "$HOME/gr00t_ws/datasets/my_dataset"'
-rsync -av --info=progress2 /path/to/models/ "$GR00T_REMOTE:gr00t_ws/models/"
-rsync -av --info=progress2 /path/to/my_dataset/ "$GR00T_REMOTE:gr00t_ws/datasets/my_dataset/"
-```
-
-Git으로 설치하려면 **이번 파일들이 원격 브랜치에 커밋/푸시된 뒤** 대상 서버에서
-아래 대체 명령을 사용한다. 현재 저장소의 `origin` 주소를 사용한 예시다.
-
-```bash
-mkdir -p "$HOME/gr00t_ws"
-git clone --recurse-submodules https://github.com/achrxme-1838/Isaac-GR00T.git \
+cd "$HOME/gr00t_ws"
+git clone --branch main --recurse-submodules \
+  https://github.com/achrxme-1838/Isaac-GR00T.git \
   "$HOME/gr00t_ws/Isaac-GR00T"
 cd "$HOME/gr00t_ws/Isaac-GR00T"
-# 기본 브랜치가 아니라면 여기서 Docker 파일이 포함된 브랜치/커밋으로 전환한다.
+git lfs install --local
+git lfs pull
+
+# 이후 사용할 Compose 플러그인 확인
+docker compose version
+```
+
+이미 같은 위치에 저장소가 있다면 clone 대신 해당 저장소에서 갱신한다.
+
+```bash
+cd "$HOME/gr00t_ws/Isaac-GR00T"
+git pull --ff-only
 git submodule update --init --recursive
+git lfs install --local
 git lfs pull
 ```
 
-## 6. 대상 서버: 초기화 → 빌드 → 실행 → 접속
+모델 다운로드는 5절을 따른다. 별도 학습 데이터는 `~/gr00t_ws/datasets` 아래에 준비한다.
+
+## 3. 초기화 → 빌드 → 실행 → 접속
 
 이후 명령은 모두 **대상 서버의 호스트 셸**에서 실행한다.
 
@@ -196,7 +99,7 @@ bash docker/workspace.sh exec gr00t bash
 셸에서 `exit`해도 작업용 컨테이너는 유지된다. 빌드 시 인터넷 접근이 필요하며,
 `~/gr00t_ws/Isaac-GR00T`와 다른 체크아웃에서 스크립트를 실행하면 경로 오류를 표시한다.
 
-## 7. 대상 서버: GPU / Python / 마운트 검증
+## 4. GPU / Python / 마운트 검증
 
 컨테이너 셸에서는 `exit`로 나온 후 호스트에서 실행한다.
 
@@ -237,7 +140,7 @@ id
 설치한다면 해당 예제 가이드를 따르고 `UV_NO_SYNC`, `UV_PROJECT_ENVIRONMENT`가
 그 환경에 맞는지 확인한다.
 
-## 8. 모델 다운로드와 추론 서버 실행
+## 5. 모델 다운로드와 추론 서버 실행
 
 Hugging Face의 [`nvidia/Cosmos-Reason2-2B`](https://huggingface.co/nvidia/Cosmos-Reason2-2B)
 접근 권한이 있는 계정으로 로그인한다. 저장소 README에 설명된 VLM 의존성이다.
@@ -285,7 +188,7 @@ bash docker/workspace.sh up -d --force-recreate
 호스트 포트 충돌 시 `export GR00T_PORT=5556`으로 바꾸고 재생성한다.
 컨테이너 안의 서버는 계속 `--port 5555`를 사용한다.
 
-## 9. 학습 실행 예시
+## 6. 학습 실행 예시
 
 SO100 형식의 데이터가 `~/gr00t_ws/datasets/my_dataset`에 있다고 가정한 예시다.
 실제 데이터에 맞춰 dataset 경로, modality config, embodiment tag를 함께 수정한다.
@@ -315,7 +218,7 @@ Compose는 모든 GPU를 컨테이너에 제공하며, 실행별 GPU 선택은
 장시간 학습은 대상 서버의 `tmux` 세션에서 위 명령을 실행하면 재접속하기 편하다.
 컨테이너를 중지/재생성하면 그 안의 학습과 추론 프로세스도 종료된다.
 
-## 10. 재접속, 업데이트, 종료
+## 7. 재접속, 업데이트, 종료
 
 ```bash
 cd "$HOME/gr00t_ws/Isaac-GR00T"
