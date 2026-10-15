@@ -12,6 +12,9 @@
 #
 # Run:
 #   docker run -it --rm --gpus all --ipc=host gr00t
+#
+# Persistent ~/gr00t_ws workspace on another Ubuntu GPU server:
+#   See docker/SERVER_SETUP.ko.md and docker/compose.yaml.
 
 FROM nvidia/cuda:12.8.0-devel-ubuntu24.04
 

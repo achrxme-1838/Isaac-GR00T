@@ -1,0 +1,53 @@
+# Run via: bash docker/workspace.sh <compose command>
+# The wrapper supplies the host workspace and the current user's UID/GID.
+services:
+  gr00t:
+    image: ${GR00T_IMAGE:-gr00t:workspace}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    init: true
+    user: "${GR00T_HOST_UID:?Use bash docker/workspace.sh}:${GR00T_HOST_GID:?Use bash docker/workspace.sh}"
+    working_dir: /workspace/gr00t_ws/Isaac-GR00T
+    environment:
+      HOME: /workspace/gr00t_ws/home
+      USER: gr00t
+      LOGNAME: gr00t
+      PYTHONPATH: /workspace/gr00t_ws/Isaac-GR00T
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      # Use the image's dependencies without mutating its root-owned venv.
+      UV_PROJECT_ENVIRONMENT: /opt/gr00t-venv
+      UV_NO_SYNC: "1"
+      UV_CACHE_DIR: /workspace/gr00t_ws/cache/uv
+      UV_LINK_MODE: copy
+      XDG_CACHE_HOME: /workspace/gr00t_ws/cache
+      HF_HOME: /workspace/gr00t_ws/cache/huggingface
+      TORCH_HOME: /workspace/gr00t_ws/cache/torch
+      TORCH_EXTENSIONS_DIR: /workspace/gr00t_ws/cache/torch_extensions
+      TRITON_CACHE_DIR: /workspace/gr00t_ws/cache/triton
+      CUDA_CACHE_PATH: /workspace/gr00t_ws/cache/cuda
+      WANDB_DIR: /workspace/gr00t_ws/logs
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics
+    volumes:
+      - type: bind
+        source: ${GR00T_WS:?Use bash docker/workspace.sh}
+        target: /workspace/gr00t_ws
+        bind:
+          create_host_path: false
+    ports:
+      - "${GR00T_BIND_IP:-127.0.0.1}:${GR00T_PORT:-5555}:5555"
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
+    command: ["sleep", "infinity"]

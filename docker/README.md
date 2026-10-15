@@ -2,6 +2,12 @@
 
 Docker configuration for building and running a containerized GR00T environment with all dependencies pre-installed. A single `Dockerfile` supports both x86_64 and aarch64 (GB200, Grace Hopper) architectures. On aarch64, `torchcodec` is installed from the prebuilt wheel shipped under `scripts/deployment/dgpu/wheels/`; the build falls back to a source compile only if the wheel is missing.
 
+For an Ubuntu NVIDIA GPU server with **all source, models, datasets, caches, and
+outputs bind-mounted from `~/gr00t_ws`**, follow the
+[한국어 서버 설치 가이드](SERVER_SETUP.ko.md). It includes host installation,
+transferring this checkout, and the `compose.yaml` / `workspace.sh` workflow,
+which reuses the Dockerfile below.
+
 ## Prerequisites
 
 - Docker (version 20.10+) and [perform post-installation setup](https://docs.docker.com/engine/install/linux-postinstall/) so you can run Docker commands without sudo. If you skip this setup, prefix the Docker commands below with `sudo`.
