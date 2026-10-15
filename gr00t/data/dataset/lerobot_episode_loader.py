@@ -280,14 +280,39 @@ class LeRobotEpisodeLoader:
         # video key names than the dataset's modality.json (e.g., N1.6 vs N1.7 naming).
         self._video_key_mapping: dict[str, str] = {}
         if "video" in modality_configs and "video" in self.modality_meta:
-            config_keys = modality_configs["video"].modality_keys
+            video_config = modality_configs["video"]
+            config_keys = video_config.modality_keys
             meta_keys = list(self.modality_meta["video"].keys())
             needs_mapping = any(k not in self.modality_meta["video"] for k in config_keys)
-            if needs_mapping:
+            if video_config.video_key_mapping is not None:
+                # Explicit mappings support selecting a subset of dataset cameras
+                # while preserving the keys expected by the policy and simulator.
+                for config_key, meta_key in video_config.video_key_mapping.items():
+                    if config_key not in config_keys:
+                        raise ValueError(
+                            f"Video mapping key {config_key!r} is not in configured keys {config_keys}"
+                        )
+                    if meta_key not in meta_keys:
+                        raise ValueError(
+                            f"Video mapping target {meta_key!r} is not in dataset keys {meta_keys}"
+                        )
+                self._video_key_mapping = dict(video_config.video_key_mapping)
+                missing_keys = [
+                    key
+                    for key in config_keys
+                    if self._video_key_mapping.get(key, key) not in meta_keys
+                ]
+                if missing_keys:
+                    raise ValueError(
+                        f"Video keys {missing_keys} are not in dataset keys {meta_keys}; "
+                        "add them to video_key_mapping."
+                    )
+            elif needs_mapping:
                 assert len(config_keys) == len(meta_keys), (
                     f"Cannot auto-map video keys: config has {len(config_keys)} keys "
                     f"{config_keys} but dataset modality meta has {len(meta_keys)} keys "
-                    f"{meta_keys}. Counts must match for positional mapping."
+                    f"{meta_keys}. Counts must match for positional mapping; "
+                    "set video_key_mapping explicitly to select a subset."
                 )
                 for config_key, meta_key in zip(config_keys, meta_keys):
                     self._video_key_mapping[config_key] = meta_key

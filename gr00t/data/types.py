@@ -98,6 +98,8 @@ class ModalityConfig:
     mean_std_embedding_keys: list[str] | None = None
     """Optional list of keys to apply mean/std normalization. If None or empty, use min/max normalization for all keys."""
     action_configs: list[ActionConfig] | None = None
+    video_key_mapping: dict[str, str] | None = None
+    """Optional mapping from video modality keys to dataset modality.json keys. Unmapped keys must exist verbatim in the dataset."""
 
     def __post_init__(self):
         """Validate fields and set default values."""

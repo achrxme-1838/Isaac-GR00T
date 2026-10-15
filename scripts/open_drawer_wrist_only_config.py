@@ -14,6 +14,8 @@ config = deepcopy(MODALITY_CONFIGS["robocasa_panda_omron"])
 config["video"] = ModalityConfig(
     delta_indices=[0],
     modality_keys=["res256_image_wrist_0"],
+    # Keep the simulator's key while reading the dataset's wrist camera.
+    video_key_mapping={"res256_image_wrist_0": "wrist_view"},
 )
 config["state"] = ModalityConfig(
     delta_indices=[0],
